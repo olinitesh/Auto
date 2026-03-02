@@ -1,53 +1,55 @@
 # Repository Guidelines
 
 ## Project Structure & Module Organization
-This repository is currently minimal and contains:
-- `prompt.md`: primary working document.
-- `.git/`: version control metadata.
+This repository is a monorepo for AutoHaggle AI services and clients.
 
-As the project grows, keep a predictable layout:
-- `src/` for implementation code.
-- `tests/` for automated tests.
-- `assets/` for static files (images, fixtures, sample data).
-- `docs/` for design notes and usage guides.
+- `apps/`: frontend clients (for example, `apps/web`).
+- `services/`: backend services (API gateway, workers, realtime services).
+- `libs/`: shared contracts, configs, and reusable templates.
+- `database/`: SQL schema, migrations, and seed data.
+- `infra/`: deployment and infrastructure definitions.
+- `scripts/`: local development and CI automation scripts.
+- `tests/`: integration and end-to-end tests.
+- `docs/`: architecture notes, API docs, and runbooks.
 
-Use small, focused modules and keep related files close together.
+Keep modules focused and place shared logic in `libs/` or `services/shared-python`.
 
 ## Build, Test, and Development Commands
-There is no build system configured yet. Use these baseline commands:
-- `git status` — check local changes before and after edits.
-- `rg --files` — list tracked project files quickly.
-- `rg "pattern"` — search code/text across the repo.
+Use the `Makefile` as the entry point for common workflows:
 
-When tooling is added, expose standard commands (for example `npm test`, `pytest`, or `make test`) and document them here.
+- `make bootstrap`: install/setup local dependencies via `scripts/dev/bootstrap.py`.
+- `make up`: start supporting containers with Docker Compose.
+- `make lint`: run Python compile checks via `scripts/ci/lint.py`.
+- `make test`: run automated tests via `scripts/ci/test.py`.
+- `make api`, `make worker`, `make communication`, `make warroom`: run backend services locally.
+- `make web`: install and start the web app (`apps/web`).
 
 ## Coding Style & Naming Conventions
-Until language-specific tooling is added, follow these defaults:
-- Indentation: 2 spaces for Markdown/JSON/YAML, 4 spaces for Python.
-- File names: use lowercase with hyphens (for example, `task-runner.md`).
-- Keep functions/classes single-purpose and names descriptive.
-- Prefer ASCII in source files unless Unicode is required.
-
-If formatters/linters are introduced, run them before opening a PR.
+- Indentation: 4 spaces for Python; 2 spaces for Markdown/YAML/JSON.
+- File names: lowercase with hyphens where practical (example: `run-war-room.py`).
+- Python: target 3.11+, keep functions/classes single-purpose, and use descriptive names.
+- Prefer ASCII unless a file already requires Unicode.
+- Before opening a PR, run `make lint` and `make test`.
 
 ## Testing Guidelines
-No test framework is configured yet. When adding tests:
-- Mirror source structure under `tests/`.
-- Name tests clearly (`test_<unit>.py`, `<unit>.spec.ts`, etc.).
-- Add at least one happy-path and one failure-path test per feature.
-- Document the test command in this file once available.
+- Framework: `pytest` (configured in `pyproject.toml`, tests under `tests/`).
+- Naming: use clear test names such as `test_<behavior>.py`.
+- Minimum expectation: cover one success path and one failure path per feature.
+- Run locally with `make test`.
 
 ## Commit & Pull Request Guidelines
-This repository has no commit history yet, so adopt a conventional format now:
-- Commit messages: `type(scope): short summary` (for example, `docs(readme): add setup notes`).
-- Keep commits focused and atomic.
+There is no established commit history yet; adopt Conventional Commits:
 
-Pull requests should include:
-- What changed and why.
-- Related issue/task reference (if available).
-- Screenshots or sample output for user-facing changes.
-- Notes on testing performed and any follow-up work.
+- `type(scope): short summary` (example: `feat(api): add session status endpoint`).
+
+PRs should include:
+
+- concise change summary and reason,
+- related issue/task reference,
+- test evidence (`make test`, `make lint`),
+- screenshots or sample payloads for user-facing/API behavior changes.
 
 ## Security & Configuration Tips
-- Do not commit secrets, tokens, or machine-specific credentials.
-- Use `.env` files locally and commit only a sanitized `.env.example` when needed.
+- Never commit secrets or tokens.
+- Use `.env.example` as the template for local `.env` values.
+- Keep environment-specific credentials out of version control.

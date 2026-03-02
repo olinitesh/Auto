@@ -19,34 +19,59 @@ Monorepo for an autonomous vehicle comparison and negotiation platform.
 - `tests/`: integration and end-to-end tests.
 
 ## Quick Start
-```powershell
+```bash
+make bootstrap
+cp .env.example .env
 make up
-powershell -ExecutionPolicy Bypass -File scripts/dev/bootstrap.ps1
 ```
 
-Copy environment template:
-```powershell
-Copy-Item .env.example .env
-```
+`make bootstrap` creates a local virtual environment at `.venv` and installs project dependencies there.
 
-Run services in separate terminals:
-```powershell
+## Run Processes
+Run each process in a separate terminal:
+
+```bash
 # 1) API Gateway
-powershell -ExecutionPolicy Bypass -File scripts/dev/run-local.ps1
+make api
 
 # 2) Negotiation worker (RQ + Redis)
-powershell -ExecutionPolicy Bypass -File scripts/dev/run-worker.ps1
+make worker
 
 # 3) Communication service (Twilio/SendGrid adapters)
-powershell -ExecutionPolicy Bypass -File scripts/dev/run-communication.ps1
+make communication
 
 # 4) War Room realtime websocket service
-powershell -ExecutionPolicy Bypass -File scripts/dev/run-war-room.ps1
+make warroom
+
+# 5) Web War Room UI
+make web
+
+# 6) Scheduled fallback ingest (recommended for price history)
+make fallback-scheduler
+```
+
+Alternative (direct Python scripts):
+
+```bash
+# 1) API Gateway
+.venv/bin/python scripts/dev/run-local.py
+
+# 2) Negotiation worker (RQ + Redis)
+.venv/bin/python scripts/dev/run-worker.py
+
+# 3) Communication service (Twilio/SendGrid adapters)
+.venv/bin/python scripts/dev/run-communication.py
+
+# 4) War Room realtime websocket service
+.venv/bin/python scripts/dev/run-war-room.py
 
 # 5) Web War Room UI
 cd apps/web
 npm install
 npm run dev
+
+# 6) Scheduled fallback ingest
+.venv/bin/python scripts/dev/run-fallback-scheduler.py
 ```
 
 Service URLs:
@@ -54,6 +79,30 @@ Service URLs:
 - Communication Service Swagger: `http://localhost:8010/docs`
 - War Room WebSocket: `ws://localhost:8020/ws/negotiations/{session_id}`
 - Web War Room: `http://localhost:5173/?sessionId={session_id}`
+
+
+## Scheduled Ingest Worker
+Run this process to keep offer history and days-on-market data fresh without manual searches.
+
+```bash
+make fallback-scheduler
+```
+
+Key `.env` settings:
+- `FALLBACK_INGEST_INTERVAL_MINUTES` (default `360`)
+- `FALLBACK_INGEST_USER_ZIP`
+- `FALLBACK_INGEST_RADIUS_MILES`
+- `FALLBACK_INGEST_BUDGET_OTD`
+- `FALLBACK_INGEST_TARGETS_JSON` (JSON list of make/model/year targets)
+- `FALLBACK_INGEST_RUN_ONCE=true` to run one cycle and exit
+
+## Troubleshooting
+- Docker errors on `make up`: ensure Docker Desktop (or Docker Engine) is running, then retry.
+- `python`/`python3` not found during `make bootstrap`: install Python 3.11+ and confirm `python3 --version` works.
+- `externally-managed-environment` (PEP 668): use `make bootstrap`; it installs into `.venv` (not system Python).
+- `npm` not found for `make web`: install Node.js LTS and verify `npm -v`.
+- Port already in use: free ports `8000`, `8010`, `8020`, or update service config.
+- Environment issues: confirm `.env` exists (`cp .env.example .env`) and required variables are set.
 
 ## Example Negotiation Flow
 Start negotiation:
@@ -92,3 +141,6 @@ curl -X POST http://localhost:8010/webhooks/twilio/sms \
     "message_sid":"SM123"
   }'
 ```
+
+
+

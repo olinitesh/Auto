@@ -1,7 +1,5 @@
-def main() -> None:
-    print('comparison-engine placeholder')
+from scraper_pipeline.main import main
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()
-

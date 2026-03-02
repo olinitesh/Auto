@@ -1,28 +1,48 @@
-.PHONY: bootstrap up test lint api worker communication warroom web
+PYTHON ?= $(shell command -v python3 2>/dev/null || command -v python 2>/dev/null)
+
+ifeq ($(strip $(PYTHON)),)
+$(error Python not found. Install Python 3.11+ and ensure python3 or python is in PATH.)
+endif
+
+ifeq ($(OS),Windows_NT)
+VENV_PYTHON ?= .venv/Scripts/python.exe
+else
+VENV_PYTHON ?= .venv/bin/python
+endif
+
+RUN_PYTHON := $(if $(wildcard $(VENV_PYTHON)),$(VENV_PYTHON),$(PYTHON))
+
+.PHONY: bootstrap up test lint api worker communication warroom web fallback-ingest fallback-scheduler
 
 bootstrap:
-	powershell -ExecutionPolicy Bypass -File scripts/dev/bootstrap.ps1
+	$(PYTHON) scripts/dev/bootstrap.py
 
 up:
 	docker compose up -d
 
 test:
-	powershell -ExecutionPolicy Bypass -File scripts/ci/test.ps1
+	$(RUN_PYTHON) scripts/ci/test.py
 
 lint:
-	powershell -ExecutionPolicy Bypass -File scripts/ci/lint.ps1
+	$(RUN_PYTHON) scripts/ci/lint.py
 
 api:
-	powershell -ExecutionPolicy Bypass -File scripts/dev/run-local.ps1
+	$(RUN_PYTHON) scripts/dev/run-local.py
 
 worker:
-	powershell -ExecutionPolicy Bypass -File scripts/dev/run-worker.ps1
+	$(RUN_PYTHON) scripts/dev/run-worker.py
 
 communication:
-	powershell -ExecutionPolicy Bypass -File scripts/dev/run-communication.ps1
+	$(RUN_PYTHON) scripts/dev/run-communication.py
 
 warroom:
-	powershell -ExecutionPolicy Bypass -File scripts/dev/run-war-room.ps1
+	$(RUN_PYTHON) scripts/dev/run-war-room.py
+
+fallback-ingest:
+	$(RUN_PYTHON) scripts/dev/run-fallback-ingest.py
+
+fallback-scheduler:
+	$(RUN_PYTHON) scripts/dev/run-fallback-scheduler.py
 
 web:
 	cd apps/web && npm install && npm run dev

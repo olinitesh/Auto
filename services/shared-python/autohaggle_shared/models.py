@@ -1,7 +1,7 @@
 from datetime import datetime
 from uuid import uuid4
 
-from sqlalchemy import JSON, DateTime, ForeignKey, Numeric, String, Text
+from sqlalchemy import JSON, DateTime, ForeignKey, Numeric, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from autohaggle_shared.database import Base
@@ -38,6 +38,35 @@ class VehicleListing(Base):
     captured_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow)
 
 
+class OfferObservation(Base):
+    __tablename__ = "offer_observation"
+    __table_args__ = (UniqueConstraint("dealership_id", "vehicle_key", name="uq_offer_observation_dealer_vehicle"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    dealership_id: Mapped[str] = mapped_column(ForeignKey("dealership.id"), nullable=False)
+    vehicle_key: Mapped[str] = mapped_column(String(80), nullable=False)
+    vin: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    year: Mapped[int | None] = mapped_column(nullable=True)
+    make: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    model: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    trim: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    data_provider: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    last_otd_price: Mapped[float | None] = mapped_column(Numeric(12, 2), nullable=True)
+    first_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow)
+    last_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow)
+    last_payload: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+
+class OfferPriceHistory(Base):
+    __tablename__ = "offer_price_history"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    dealership_id: Mapped[str] = mapped_column(ForeignKey("dealership.id"), nullable=False)
+    vehicle_key: Mapped[str] = mapped_column(String(80), nullable=False)
+    vin: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    otd_price: Mapped[float] = mapped_column(Numeric(12, 2), nullable=False)
+    data_provider: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow)
+
 class NegotiationSession(Base):
     __tablename__ = "negotiation_session"
 
@@ -68,7 +97,7 @@ class NegotiationMessage(Base):
     channel: Mapped[str] = mapped_column(String(20), nullable=False)
     sender_identity: Mapped[str] = mapped_column(String(255), nullable=False)
     body: Mapped[str] = mapped_column(Text, nullable=False)
-    metadata: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    message_metadata: Mapped[dict | None] = mapped_column("metadata", JSON, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow)
 
     session: Mapped[NegotiationSession] = relationship(back_populates="messages")
