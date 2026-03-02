@@ -1,0 +1,10 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "AutoHaggleEvent",
+  "type": "object",
+  "properties": {
+    "event_type": { "type": "string" },
+    "timestamp": { "type": "string", "format": "date-time" }
+  },
+  "required": ["event_type", "timestamp"]
+}
