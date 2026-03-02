@@ -66,6 +66,24 @@ type OfferHistoryResponse = {
   points: OfferHistoryPoint[];
 };
 
+type OfferTrendKey = {
+  dealership_id: string;
+  vehicle_id: string;
+};
+
+type OfferTrendItem = {
+  dealership_id: string;
+  vehicle_id: string;
+  first_seen_at?: string;
+  last_seen_at?: string;
+  days_on_market?: number;
+  days_on_market_bucket?: string;
+  price_drop_7d?: number;
+  price_drop_30d?: number;
+  snapshot_count: number;
+};
+
+type OfferTrendsBulkResponse = { trends: OfferTrendItem[] };
 type OfferSearchResponse = { offers: DealerOffer[] };
 type OfferRankResponse = { ranked_offers: RankedOffer[] };
 type IngestFallbackResponse = {
@@ -229,6 +247,46 @@ export function ComparisonPage() {
     return data.ranked_offers ?? [];
   }
 
+  async function fetchTrendSignals(offersToEnrich: DealerOffer[]): Promise<DealerOffer[]> {
+    if (offersToEnrich.length === 0) {
+      return offersToEnrich;
+    }
+
+    const trendKeys: OfferTrendKey[] = offersToEnrich.map((offer) => ({
+      dealership_id: offer.dealership_id,
+      vehicle_id: offer.vehicle_id,
+    }));
+
+    const response = await fetch(`${apiBase}/offers/trends/bulk`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ offers: trendKeys }),
+    });
+
+    if (!response.ok) {
+      return offersToEnrich;
+    }
+
+    const data = (await response.json()) as OfferTrendsBulkResponse;
+    const trendByKey = new Map(
+      (data.trends ?? []).map((item) => [`${item.dealership_id}::${item.vehicle_id}`, item]),
+    );
+
+    return offersToEnrich.map((offer) => {
+      const trend = trendByKey.get(`${offer.dealership_id}::${offer.vehicle_id}`);
+      if (!trend) {
+        return offer;
+      }
+      return {
+        ...offer,
+        days_on_market: offer.days_on_market ?? trend.days_on_market,
+        days_on_market_bucket: trend.days_on_market_bucket ?? offer.days_on_market_bucket,
+        price_drop_7d: trend.price_drop_7d ?? offer.price_drop_7d,
+        price_drop_30d: trend.price_drop_30d ?? offer.price_drop_30d,
+      };
+    });
+  }
+
   async function loadOfferHistory(offer: DealerOffer): Promise<void> {
     const key = offerKey(offer);
 
@@ -305,14 +363,17 @@ export function ComparisonPage() {
 
       const data = (await response.json()) as OfferSearchResponse;
       const nextOffers = data.offers ?? [];
-      setOffers(nextOffers);
 
       if (nextOffers.length === 0) {
+        setOffers([]);
         setRankedOffers([]);
         return;
       }
 
-      const ranked = await rankOfferList(nextOffers);
+      const enrichedOffers = await fetchTrendSignals(nextOffers);
+      setOffers(enrichedOffers);
+
+      const ranked = await rankOfferList(enrichedOffers);
       setRankedOffers(ranked);
     } catch (err) {
       setOffers([]);
@@ -659,6 +720,14 @@ export function ComparisonPage() {
     </main>
   );
 }
+
+
+
+
+
+
+
+
 
 
 

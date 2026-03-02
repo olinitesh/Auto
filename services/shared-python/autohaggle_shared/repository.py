@@ -4,7 +4,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from autohaggle_shared.models import Dealer, NegotiationMessage, NegotiationSession, OfferObservation, OfferPriceHistory
-from autohaggle_shared.schemas import OfferHistoryPoint, StartNegotiationRequest
+from autohaggle_shared.schemas import OfferHistoryPoint, OfferTrendItem, StartNegotiationRequest
 
 
 def get_or_create_dealer(
@@ -31,6 +31,20 @@ def get_or_create_dealer(
     db.add(dealer)
     db.flush()
     return dealer
+
+
+def _dom_bucket(days: int | None) -> str | None:
+    if days is None:
+        return None
+    if days <= 7:
+        return "0-7"
+    if days <= 14:
+        return "8-14"
+    if days <= 30:
+        return "15-30"
+    if days <= 60:
+        return "31-60"
+    return "61+"
 
 
 def upsert_offer_observations(db: Session, offers: list[dict]) -> dict[str, int]:
@@ -105,12 +119,12 @@ def upsert_offer_observations(db: Session, offers: list[dict]) -> dict[str, int]
     return days_by_offer_id
 
 
-def get_offer_trend_signals(
+def get_offer_trend_summary(
     db: Session,
     *,
     dealership_id: str,
     vehicle_key: str,
-) -> dict[str, float | None]:
+) -> OfferTrendItem:
     rows = (
         db.execute(
             select(OfferPriceHistory)
@@ -125,8 +139,34 @@ def get_offer_trend_signals(
         .all()
     )
 
+    observation = db.execute(
+        select(OfferObservation).where(
+            OfferObservation.dealership_id == dealership_id,
+            OfferObservation.vehicle_key == vehicle_key,
+        )
+    ).scalar_one_or_none()
+
+    first_seen_at: str | None = None
+    last_seen_at: str | None = None
+    days_on_market: int | None = None
+
+    if observation is not None:
+        first_seen_at = observation.first_seen_at.isoformat()
+        last_seen_at = observation.last_seen_at.isoformat()
+        days_on_market = max((observation.last_seen_at.date() - observation.first_seen_at.date()).days, 0)
+
     if not rows:
-        return {"price_drop_7d": None, "price_drop_30d": None}
+        return OfferTrendItem(
+            dealership_id=dealership_id,
+            vehicle_id=vehicle_key,
+            first_seen_at=first_seen_at,
+            last_seen_at=last_seen_at,
+            days_on_market=days_on_market,
+            days_on_market_bucket=_dom_bucket(days_on_market),
+            price_drop_7d=None,
+            price_drop_30d=None,
+            snapshot_count=0,
+        )
 
     latest = float(rows[-1].otd_price)
     now = rows[-1].seen_at
@@ -142,9 +182,29 @@ def get_offer_trend_signals(
             return None
         return round(max(0.0, baseline - latest), 2)
 
+    return OfferTrendItem(
+        dealership_id=dealership_id,
+        vehicle_id=vehicle_key,
+        first_seen_at=first_seen_at,
+        last_seen_at=last_seen_at,
+        days_on_market=days_on_market,
+        days_on_market_bucket=_dom_bucket(days_on_market),
+        price_drop_7d=_drop(7),
+        price_drop_30d=_drop(30),
+        snapshot_count=len(rows),
+    )
+
+
+def get_offer_trend_signals(
+    db: Session,
+    *,
+    dealership_id: str,
+    vehicle_key: str,
+) -> dict[str, float | None]:
+    trend = get_offer_trend_summary(db, dealership_id=dealership_id, vehicle_key=vehicle_key)
     return {
-        "price_drop_7d": _drop(7),
-        "price_drop_30d": _drop(30),
+        "price_drop_7d": trend.price_drop_7d,
+        "price_drop_30d": trend.price_drop_30d,
     }
 
 

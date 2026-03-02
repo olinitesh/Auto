@@ -63,6 +63,31 @@ class OfferSearchResponse(BaseModel):
     offers: list[DealerOffer]
 
 
+class OfferTrendKey(BaseModel):
+    dealership_id: str = Field(min_length=1, max_length=64)
+    vehicle_id: str = Field(min_length=1, max_length=128)
+
+
+class OfferTrendItem(BaseModel):
+    dealership_id: str
+    vehicle_id: str
+    first_seen_at: str | None = None
+    last_seen_at: str | None = None
+    days_on_market: int | None = Field(default=None, ge=0)
+    days_on_market_bucket: str | None = None
+    price_drop_7d: float | None = Field(default=None, ge=0)
+    price_drop_30d: float | None = Field(default=None, ge=0)
+    snapshot_count: int = Field(default=0, ge=0)
+
+
+class OfferTrendsBulkRequest(BaseModel):
+    offers: list[OfferTrendKey] = Field(min_length=1)
+
+
+class OfferTrendsBulkResponse(BaseModel):
+    trends: list[OfferTrendItem]
+
+
 class RankedOffer(BaseModel):
     rank: int = Field(ge=1)
     offer: DealerOffer

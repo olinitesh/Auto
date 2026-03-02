@@ -13,7 +13,7 @@ from autohaggle_shared.repository import (
     add_message,
     create_session,
     get_offer_history,
-    get_offer_trend_signals,
+    get_offer_trend_summary,
     get_session_with_messages,
     list_sessions,
     upsert_offer_observations,
@@ -32,6 +32,9 @@ from autohaggle_shared.schemas import (
     OfferRankResponse,
     OfferSearchRequest,
     OfferSearchResponse,
+    OfferTrendItem,
+    OfferTrendsBulkRequest,
+    OfferTrendsBulkResponse,
     RankedOffer,
     StartNegotiationRequest,
     StartNegotiationResponse,
@@ -140,16 +143,34 @@ def search_offers(payload: OfferSearchRequest, db: Session = Depends(get_db)) ->
             item["days_on_market_source"] = "tracked"
 
         item["days_on_market_bucket"] = _dom_bucket(item.get("days_on_market"))
-        trend = get_offer_trend_signals(
+        trend = get_offer_trend_summary(
             db,
             dealership_id=str(item.get("dealership_id") or ""),
             vehicle_key=str(item.get("vehicle_id") or ""),
         )
-        item["price_drop_7d"] = trend.get("price_drop_7d")
-        item["price_drop_30d"] = trend.get("price_drop_30d")
+        item["price_drop_7d"] = trend.price_drop_7d
+        item["price_drop_30d"] = trend.price_drop_30d
 
     offers = [DealerOffer(**item) for item in raw_offers]
     return OfferSearchResponse(offers=offers)
+
+
+@app.get("/offers/trends", response_model=OfferTrendItem)
+def offer_trends(
+    dealership_id: str,
+    vehicle_id: str,
+    db: Session = Depends(get_db),
+) -> OfferTrendItem:
+    return get_offer_trend_summary(db, dealership_id=dealership_id, vehicle_key=vehicle_id)
+
+
+@app.post("/offers/trends/bulk", response_model=OfferTrendsBulkResponse)
+def offer_trends_bulk(payload: OfferTrendsBulkRequest, db: Session = Depends(get_db)) -> OfferTrendsBulkResponse:
+    trends = [
+        get_offer_trend_summary(db, dealership_id=item.dealership_id, vehicle_key=item.vehicle_id)
+        for item in payload.offers
+    ]
+    return OfferTrendsBulkResponse(trends=trends)
 
 
 @app.get("/offers/history", response_model=OfferHistoryResponse)
