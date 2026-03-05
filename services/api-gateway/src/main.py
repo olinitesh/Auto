@@ -1,32 +1,57 @@
+import json
+import os
+import re
+import urllib.error
+import urllib.request
+from html import unescape
+
 from fastapi import Depends, FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
+from rq.exceptions import NoSuchJobError
+from rq.job import Job
 from sqlalchemy.orm import Session
 
 from autohaggle_shared.communication_client import send_negotiation_email, send_negotiation_sms
-from autohaggle_shared.database import get_db, init_db
+from autohaggle_shared.database import SessionLocal, get_db, init_db
 from autohaggle_shared.events import publish_session_event
 from autohaggle_shared.jobs import run_autonomous_round
 from autohaggle_shared.negotiation import run_negotiation_strategy
 from autohaggle_shared.queueing import get_queue
 from autohaggle_shared.repository import (
     add_message,
+    acknowledge_saved_search_alert,
+    acknowledge_saved_search_alerts,
+    create_saved_search,
     create_session,
+    delete_saved_search,
     get_offer_history,
     get_offer_trend_summary,
     get_session_with_messages,
+    list_offer_catalog,
+    list_saved_search_alerts,
+    list_saved_searches,
     list_sessions,
+    update_session_autopilot,
+    update_session_job_metadata,
+    update_session_status,
     upsert_offer_observations,
 )
 from autohaggle_shared.schemas import (
+    AutopilotUpdateRequest,
+    AssistantChatRequest,
+    AssistantChatResponse,
     DealerOffer,
     DealerSiteInput,
     EnqueueRoundRequest,
     EnqueueRoundResponse,
+    JobStatusResponse,
     HealthResponse,
     NegotiationDecision,
     NegotiationMessageOut,
     NegotiationSessionOut,
+    OfferCatalogResponse,
     OfferHistoryResponse,
     OfferRankRequest,
     OfferRankResponse,
@@ -36,6 +61,14 @@ from autohaggle_shared.schemas import (
     OfferTrendsBulkRequest,
     OfferTrendsBulkResponse,
     RankedOffer,
+    SavedSearchAlertAckAllRequest,
+    SavedSearchAlertAckAllResponse,
+    SavedSearchAlertAckResponse,
+    SavedSearchAlertListResponse,
+    SavedSearchCreateRequest,
+    SavedSearchDeleteResponse,
+    SavedSearchListResponse,
+    SavedSearchOut,
     StartNegotiationRequest,
     StartNegotiationResponse,
 )
@@ -72,6 +105,13 @@ class IngestFallbackResponse(BaseModel):
     updated: int
 
 
+class SimulatedInboundRequest(BaseModel):
+    channel: str = Field(default="email", min_length=3, max_length=20)
+    body: str = Field(min_length=1, max_length=4000)
+    sender_identity: str | None = Field(default=None, max_length=255)
+    user_name: str | None = Field(default=None, max_length=120)
+
+
 def _dom_bucket(days: int | None) -> str | None:
     if days is None:
         return None
@@ -85,6 +125,417 @@ def _dom_bucket(days: int | None) -> str | None:
         return "31-60"
     return "61+"
 
+OPENAI_BASE_URL = os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1")
+OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4.1-mini")
+
+
+def _format_money(value: float | None) -> str:
+    if value is None:
+        return "n/a"
+    return f"${value:,.0f}"
+
+
+def _assistant_suggestions(message: str) -> list[str]:
+    lowered = message.lower()
+    if "negot" in lowered or "email" in lowered or "message" in lowered:
+        return [
+            "Draft a firmer follow-up message",
+            "What counter should I send if dealer refuses?",
+            "Summarize leverage from competing offers",
+        ]
+    if "dom" in lowered or "risk" in lowered or "trend" in lowered:
+        return [
+            "Explain why DOM affects leverage",
+            "Which offer has highest urgency?",
+            "Compare trend risk for top 3 offers",
+        ]
+    return [
+        "Which offer should I negotiate first and why?",
+        "Give me a target anchor for the top deal",
+        "What should I ask the dealer next?",
+    ]
+
+
+def _extract_offer_ids(context) -> set[str]:
+    if not context:
+        return set()
+
+    ids: set[str] = set()
+    for offer in context.offers:
+        if offer.offer_id:
+            ids.add(str(offer.offer_id))
+    for ranked in context.ranked_offers:
+        if ranked.offer.offer_id:
+            ids.add(str(ranked.offer.offer_id))
+    return ids
+
+
+def _serialize_offer_for_prompt(offer: DealerOffer, rank: int | None = None) -> dict:
+    return {
+        "offer_id": offer.offer_id,
+        "rank": rank,
+        "dealership_name": offer.dealership_name,
+        "vehicle_label": offer.vehicle_label,
+        "otd_price": offer.otd_price,
+        "msrp": offer.msrp,
+        "advertised_price": offer.advertised_price,
+        "selling_price": offer.selling_price,
+        "listed_price": offer.listed_price,
+        "dealer_discount": offer.dealer_discount,
+        "fees": offer.fees,
+        "distance_miles": offer.distance_miles,
+        "days_on_market": offer.days_on_market,
+        "days_on_market_bucket": offer.days_on_market_bucket,
+        "price_drop_7d": offer.price_drop_7d,
+        "price_drop_30d": offer.price_drop_30d,
+        "inventory_status": offer.inventory_status,
+        "vin": offer.vin,
+    }
+
+
+def _normalize_external_url(value: str | None) -> str | None:
+    raw = (value or "").strip()
+    if not raw:
+        return None
+
+    if re.match(r"^https?://", raw, flags=re.IGNORECASE):
+        return raw
+    if raw.startswith("//"):
+        return f"https:{raw}"
+    return f"https://{raw}"
+
+
+def _candidate_live_urls(context) -> list[str]:
+    if not context:
+        return []
+
+    urls: list[str] = []
+    seen: set[str] = set()
+
+    def add_url(value: str | None) -> None:
+        normalized = _normalize_external_url(value)
+        if not normalized:
+            return
+        if normalized in seen:
+            return
+        seen.add(normalized)
+        urls.append(normalized)
+
+    for ranked in context.ranked_offers[:8]:
+        add_url(ranked.offer.listing_url)
+        add_url(ranked.offer.dealer_url)
+
+    for offer in context.offers[:10]:
+        add_url(offer.listing_url)
+        add_url(offer.dealer_url)
+
+    return urls[:4]
+
+
+def _extract_text_snippet(html_text: str, max_chars: int = 1600) -> str:
+    body = re.sub(r"<script\b[^>]*>.*?</script>", " ", html_text, flags=re.IGNORECASE | re.DOTALL)
+    body = re.sub(r"<style\b[^>]*>.*?</style>", " ", body, flags=re.IGNORECASE | re.DOTALL)
+    body = re.sub(r"<[^>]+>", " ", body)
+    body = unescape(body)
+    body = re.sub(r"\s+", " ", body).strip()
+    return body[:max_chars]
+
+
+def _fetch_live_pages_for_prompt(payload: AssistantChatRequest) -> tuple[list[dict[str, str]], list[str]]:
+    if not payload.use_live_web:
+        return [], []
+
+    pages: list[dict[str, str]] = []
+    checked_urls: list[str] = []
+    urls = _candidate_live_urls(payload.context)
+
+    for url in urls:
+        checked_urls.append(url)
+        try:
+            req = urllib.request.Request(
+                url=url,
+                headers={
+                    "User-Agent": "AutoHaggleCopilot/0.1 (+local)",
+                    "Accept": "text/html,application/xhtml+xml",
+                },
+                method="GET",
+            )
+            with urllib.request.urlopen(req, timeout=8) as response:
+                raw = response.read(220_000).decode("utf-8", errors="ignore")
+            snippet = _extract_text_snippet(raw)
+            if snippet:
+                pages.append({"url": url, "snippet": snippet})
+        except Exception:
+            # Skip individual fetch failures; keep checked URL list for transparency.
+            continue
+
+    return pages, checked_urls
+
+
+def _build_assistant_messages(payload: AssistantChatRequest) -> tuple[list[dict[str, str]], list[str]]:
+    context = payload.context
+    rank_by_offer_id: dict[str, int] = {}
+    if context:
+        for ranked in context.ranked_offers[:20]:
+            rank_by_offer_id[str(ranked.offer.offer_id)] = int(ranked.rank)
+
+    prompt_offers: list[dict] = []
+    if context:
+        source = context.ranked_offers[:20] if context.ranked_offers else []
+        if source:
+            for ranked in source:
+                prompt_offers.append(_serialize_offer_for_prompt(ranked.offer, rank=int(ranked.rank)))
+        else:
+            for offer in context.offers[:20]:
+                prompt_offers.append(_serialize_offer_for_prompt(offer, rank=rank_by_offer_id.get(str(offer.offer_id))))
+
+    live_pages, checked_urls = _fetch_live_pages_for_prompt(payload)
+
+    context_blob = {
+        "budget_otd": context.budget_otd if context else None,
+        "offers": prompt_offers,
+        "use_live_web": payload.use_live_web,
+        "live_pages": live_pages,
+    }
+
+    system_text = (
+        "You are AutoHaggle Copilot. Use the provided context and any fetched live pages. "
+        "If live pages are empty, say you could not fetch dealer pages for this request. "
+        "Give concise, actionable dealership guidance. "
+        "If evidence comes from specific offers, include the final line exactly in this format: "
+        "CITED_IDS: offer_id_1,offer_id_2 . "
+        "If no citation, use CITED_IDS: none"
+    )
+
+    messages: list[dict[str, str]] = [{"role": "system", "content": system_text}]
+
+    for item in payload.history[-8:]:
+        role = "assistant" if item.role.strip().lower() == "assistant" else "user"
+        messages.append({"role": role, "content": item.content})
+
+    messages.append(
+        {
+            "role": "user",
+            "content": (
+                f"Question: {payload.message}\n\n"
+                f"Context JSON:\n{json.dumps(context_blob, ensure_ascii=True)}"
+            ),
+        }
+    )
+    return messages, checked_urls
+
+def _openai_headers() -> dict[str, str]:
+    api_key = (os.getenv("OPENAI_API_KEY") or "").strip()
+    if not api_key:
+        raise RuntimeError("OPENAI_API_KEY is not configured")
+    return {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json",
+    }
+
+
+def _parse_answer_and_citations(text: str, allowed_offer_ids: set[str]) -> tuple[str, list[str]]:
+    raw = text.strip()
+    citation_line_match = re.search(r"(?im)^CITED_IDS:\s*(.+)$", raw)
+
+    cited: list[str] = []
+    if citation_line_match:
+        cited_raw = citation_line_match.group(1).strip()
+        raw = re.sub(r"(?im)^CITED_IDS:\s*.+$", "", raw).strip()
+        if cited_raw.lower() != "none":
+            for token in re.split(r"[\s,]+", cited_raw):
+                item = token.strip()
+                if item and item in allowed_offer_ids and item not in cited:
+                    cited.append(item)
+
+    bracket_ids = re.findall(r"\[\[([^\]]+)\]\]", raw)
+    if bracket_ids:
+        for item in bracket_ids:
+            clean = item.strip()
+            if clean in allowed_offer_ids and clean not in cited:
+                cited.append(clean)
+        raw = re.sub(r"\[\[[^\]]+\]\]", "", raw).strip()
+
+    return raw, cited
+
+
+def _build_fallback_assistant_answer(payload: AssistantChatRequest) -> AssistantChatResponse:
+    message = payload.message.strip()
+    context = payload.context
+    offers = list(context.offers) if context else []
+    ranked = list(context.ranked_offers) if context else []
+    budget = context.budget_otd if context else None
+
+    top_offer: DealerOffer | None = None
+    if ranked:
+        top_offer = ranked[0].offer
+    elif offers:
+        top_offer = min(offers, key=lambda item: item.otd_price)
+
+    if not top_offer:
+        return AssistantChatResponse(
+            answer="I do not have offer data yet. Run Search + Rank first, then ask again.",
+            suggestions=_assistant_suggestions(message),
+            cited_offer_ids=[],
+            checked_urls=[],
+            model="fallback-rule-engine",
+        )
+
+    delta_text = ""
+    if budget:
+        delta = top_offer.otd_price - budget
+        delta_text = (
+            f" This is {_format_money(abs(delta))} under your budget."
+            if delta <= 0
+            else f" This is {_format_money(delta)} above your budget."
+        )
+
+    lowered = message.lower()
+    if "negot" in lowered or "email" in lowered or "message" in lowered:
+        anchor = max(1.0, top_offer.otd_price - max(300.0, top_offer.otd_price * 0.015))
+        answer = (
+            f"Recommended anchor is {_format_money(anchor)} for {top_offer.vehicle_label} at {top_offer.dealership_name}. "
+            f"Use: \"I can buy this week at {_format_money(anchor)} OTD if we finalize today.\""
+        )
+    elif "dom" in lowered or "risk" in lowered or "trend" in lowered:
+        dom = top_offer.days_on_market or 0
+        risk = "LOW" if dom < 20 else "MEDIUM" if dom < 45 else "HIGH"
+        answer = f"Top-offer DOM risk is {risk} (DOM {dom}d).{delta_text}"
+    else:
+        answer = (
+            f"Best current candidate is {top_offer.vehicle_label} at {top_offer.dealership_name} "
+            f"for {_format_money(top_offer.otd_price)} OTD.{delta_text}"
+        )
+
+    return AssistantChatResponse(
+        answer=answer.strip(),
+        suggestions=_assistant_suggestions(message),
+        cited_offer_ids=[str(top_offer.offer_id)],
+        checked_urls=[],
+        model="fallback-rule-engine",
+    )
+
+
+def _call_openai_completion(payload: AssistantChatRequest) -> tuple[str, str, list[str]]:
+    messages, checked_urls = _build_assistant_messages(payload)
+    url = f"{OPENAI_BASE_URL.rstrip('/')}/chat/completions"
+    req_body = {
+        "model": OPENAI_MODEL,
+        "temperature": 0.2,
+        "messages": messages,
+    }
+    data = json.dumps(req_body).encode("utf-8")
+    request = urllib.request.Request(url=url, data=data, headers=_openai_headers(), method="POST")
+
+    with urllib.request.urlopen(request, timeout=90) as response:
+        parsed = json.loads(response.read().decode("utf-8"))
+
+    choices = parsed.get("choices") or []
+    content = ""
+    if choices:
+        content = str((choices[0].get("message") or {}).get("content") or "")
+    model = str(parsed.get("model") or OPENAI_MODEL)
+    return content, model, checked_urls
+
+
+def _stream_openai_completion(messages: list[dict[str, str]]):
+    url = f"{OPENAI_BASE_URL.rstrip('/')}/chat/completions"
+    req_body = {
+        "model": OPENAI_MODEL,
+        "temperature": 0.2,
+        "stream": True,
+        "messages": messages,
+    }
+    data = json.dumps(req_body).encode("utf-8")
+    request = urllib.request.Request(url=url, data=data, headers=_openai_headers(), method="POST")
+
+    model_name = OPENAI_MODEL
+    with urllib.request.urlopen(request, timeout=120) as response:
+        for raw_line in response:
+            line = raw_line.decode("utf-8", errors="ignore").strip()
+            if not line or not line.startswith("data:"):
+                continue
+
+            payload_text = line[5:].strip()
+            if payload_text == "[DONE]":
+                break
+
+            try:
+                event = json.loads(payload_text)
+            except json.JSONDecodeError:
+                continue
+
+            model_name = str(event.get("model") or model_name)
+            choices = event.get("choices") or []
+            if not choices:
+                continue
+            delta = (choices[0].get("delta") or {}).get("content")
+            if isinstance(delta, str) and delta:
+                yield delta, model_name
+
+def _sse(event_name: str, data: dict) -> str:
+    return f"event: {event_name}\ndata: {json.dumps(data, ensure_ascii=True)}\n\n"
+
+
+@app.post("/assistant/chat", response_model=AssistantChatResponse)
+def assistant_chat(payload: AssistantChatRequest) -> AssistantChatResponse:
+    allowed_ids = _extract_offer_ids(payload.context)
+    try:
+        raw_answer, model_name, checked_urls = _call_openai_completion(payload)
+        answer, cited_offer_ids = _parse_answer_and_citations(raw_answer, allowed_ids)
+        return AssistantChatResponse(
+            answer=answer or "I could not produce an answer for that prompt.",
+            suggestions=_assistant_suggestions(payload.message),
+            cited_offer_ids=cited_offer_ids,
+            checked_urls=checked_urls,
+            model=model_name,
+        )
+    except Exception:
+        return _build_fallback_assistant_answer(payload)
+
+
+@app.post("/assistant/chat/stream")
+def assistant_chat_stream(payload: AssistantChatRequest) -> StreamingResponse:
+    allowed_ids = _extract_offer_ids(payload.context)
+    messages, checked_urls = _build_assistant_messages(payload)
+
+    def stream_events():
+        collected: list[str] = []
+        model_name = OPENAI_MODEL
+
+        try:
+            for delta, model_name in _stream_openai_completion(messages):
+                collected.append(delta)
+                yield _sse("delta", {"text": delta})
+
+            full_text = "".join(collected)
+            answer, cited_offer_ids = _parse_answer_and_citations(full_text, allowed_ids)
+            yield _sse(
+                "done",
+                {
+                    "answer": answer or "I could not produce an answer for that prompt.",
+                    "suggestions": _assistant_suggestions(payload.message),
+                    "cited_offer_ids": cited_offer_ids,
+                    "checked_urls": checked_urls,
+                    "model": model_name,
+                },
+            )
+        except Exception:
+            fallback = _build_fallback_assistant_answer(payload)
+            for chunk_start in range(0, len(fallback.answer), 24):
+                yield _sse("delta", {"text": fallback.answer[chunk_start : chunk_start + 24]})
+            yield _sse(
+                "done",
+                {
+                    "answer": fallback.answer,
+                    "suggestions": fallback.suggestions,
+                    "cited_offer_ids": fallback.cited_offer_ids,
+                    "checked_urls": checked_urls,
+                    "model": fallback.model,
+                },
+            )
+
+    return StreamingResponse(stream_events(), media_type="text/event-stream")
 
 @app.on_event("startup")
 def startup() -> None:
@@ -96,6 +547,59 @@ def health() -> HealthResponse:
     return HealthResponse()
 
 
+@app.get("/saved-searches", response_model=SavedSearchListResponse)
+def get_saved_searches(limit: int = 50, db: Session = Depends(get_db)) -> SavedSearchListResponse:
+    return SavedSearchListResponse(searches=list_saved_searches(db, limit=limit))
+
+
+@app.post("/saved-searches", response_model=SavedSearchOut)
+def save_search(payload: SavedSearchCreateRequest, db: Session = Depends(get_db)) -> SavedSearchOut:
+    return create_saved_search(db, payload)
+
+
+@app.delete("/saved-searches/{search_id}", response_model=SavedSearchDeleteResponse)
+def remove_saved_search(search_id: str, db: Session = Depends(get_db)) -> SavedSearchDeleteResponse:
+    deleted = delete_saved_search(db, search_id)
+    if not deleted:
+        raise HTTPException(status_code=404, detail="Saved search not found")
+    return SavedSearchDeleteResponse(deleted=True)
+@app.get("/alerts", response_model=SavedSearchAlertListResponse)
+def get_alerts(
+    include_acknowledged: bool = False,
+    page: int = 1,
+    page_size: int = 20,
+    db: Session = Depends(get_db),
+) -> SavedSearchAlertListResponse:
+    alerts, total = list_saved_search_alerts(
+        db,
+        include_acknowledged=include_acknowledged,
+        page=page,
+        page_size=page_size,
+    )
+    safe_page_size = max(1, min(page_size, 100))
+    total_pages = max(1, (total + safe_page_size - 1) // safe_page_size)
+    safe_page = max(1, min(page, total_pages))
+    return SavedSearchAlertListResponse(
+        alerts=alerts,
+        total=total,
+        page=safe_page,
+        page_size=safe_page_size,
+        total_pages=total_pages,
+    )
+
+
+@app.post("/alerts/{alert_id}/ack", response_model=SavedSearchAlertAckResponse)
+def ack_alert(alert_id: str, db: Session = Depends(get_db)) -> SavedSearchAlertAckResponse:
+    ok = acknowledge_saved_search_alert(db, alert_id)
+    if not ok:
+        raise HTTPException(status_code=404, detail="Alert not found")
+    return SavedSearchAlertAckResponse(acknowledged=True)
+
+
+@app.post("/alerts/ack-all", response_model=SavedSearchAlertAckAllResponse)
+def ack_all_alerts(payload: SavedSearchAlertAckAllRequest, db: Session = Depends(get_db)) -> SavedSearchAlertAckAllResponse:
+    count = acknowledge_saved_search_alerts(db, alert_ids=payload.alert_ids)
+    return SavedSearchAlertAckAllResponse(acknowledged_count=count)
 @app.post("/ingest/fallback", response_model=IngestFallbackResponse)
 def ingest_fallback(payload: IngestFallbackRequest) -> IngestFallbackResponse:
     result = ingest_dealer_data_to_fallback(
@@ -131,6 +635,25 @@ def search_offers(payload: OfferSearchRequest, db: Session = Depends(get_db)) ->
         include_hidden=payload.include_hidden,
     )
 
+    # Providers can return incomplete records (for example, zero/blank prices).
+    # Filter invalid rows before persistence/serialization so the API stays stable.
+    sanitized_offers: list[dict] = []
+    for item in raw_offers:
+        try:
+            otd_price = float(item.get("otd_price") or 0.0)
+        except (TypeError, ValueError):
+            continue
+        if otd_price <= 0:
+            continue
+        if not item.get("offer_id") or not item.get("dealership_id") or not item.get("vehicle_id"):
+            continue
+        item["otd_price"] = otd_price
+        sanitized_offers.append(item)
+
+    raw_offers = sanitized_offers
+    if not raw_offers:
+        return OfferSearchResponse(offers=[])
+
     days_by_offer_id = upsert_offer_observations(db, raw_offers)
     for item in raw_offers:
         offer_id = str(item.get("offer_id") or "")
@@ -153,6 +676,52 @@ def search_offers(payload: OfferSearchRequest, db: Session = Depends(get_db)) ->
 
     offers = [DealerOffer(**item) for item in raw_offers]
     return OfferSearchResponse(offers=offers)
+
+
+@app.get("/offers/catalog", response_model=OfferCatalogResponse)
+def offer_catalog(
+    dealer_id: str | None = None,
+    dealer_name: str | None = None,
+    city: str | None = None,
+    state: str | None = None,
+    make: str | None = None,
+    model: str | None = None,
+    min_otd: float | None = None,
+    max_otd: float | None = None,
+    min_dom: int | None = None,
+    max_dom: int | None = None,
+    page: int = 1,
+    page_size: int = 50,
+    db: Session = Depends(get_db),
+) -> OfferCatalogResponse:
+    offers, total, filters = list_offer_catalog(
+        db,
+        dealer_id=dealer_id,
+        dealer_name=dealer_name,
+        city=city,
+        state=state,
+        make=make,
+        model=model,
+        min_otd=min_otd,
+        max_otd=max_otd,
+        min_dom=min_dom,
+        max_dom=max_dom,
+        page=page,
+        page_size=page_size,
+    )
+
+    safe_page_size = max(1, min(page_size, 200))
+    total_pages = max(1, (total + safe_page_size - 1) // safe_page_size)
+    safe_page = max(1, min(page, total_pages))
+
+    return OfferCatalogResponse(
+        offers=offers,
+        total=total,
+        page=safe_page,
+        page_size=safe_page_size,
+        total_pages=total_pages,
+        filters=filters,
+    )
 
 
 @app.get("/offers/trends", response_model=OfferTrendItem)
@@ -265,6 +834,9 @@ def start_negotiation(payload: StartNegotiationRequest, db: Session = Depends(ge
         target_otd=payload.target_otd,
         dealer_otd=payload.dealer_otd,
         competitor_best_otd=payload.competitor_best_otd,
+        offer_rank=payload.offer_rank,
+        days_on_market=payload.days_on_market,
+        price_drop_30d=payload.price_drop_30d,
     )
 
     message = add_message(
@@ -278,6 +850,12 @@ def start_negotiation(payload: StartNegotiationRequest, db: Session = Depends(ge
             "action": strategy["action"],
             "anchor_otd": strategy["anchor_otd"],
             "rationale": strategy["rationale"],
+            "saved_search_id": payload.saved_search_id,
+            "offer_id": payload.offer_id,
+            "offer_rank": payload.offer_rank,
+            "days_on_market": payload.days_on_market,
+            "price_drop_7d": payload.price_drop_7d,
+            "price_drop_30d": payload.price_drop_30d,
         },
     )
     db.commit()
@@ -319,6 +897,43 @@ def get_negotiation(session_id: str, db: Session = Depends(get_db)) -> Negotiati
     return to_session_out(session)
 
 
+@app.patch("/negotiations/{session_id}/autopilot", response_model=NegotiationSessionOut)
+def update_negotiation_autopilot(
+    session_id: str,
+    payload: AutopilotUpdateRequest,
+    db: Session = Depends(get_db),
+) -> NegotiationSessionOut:
+    session = get_session_with_messages(db, session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Negotiation session not found")
+
+    requested_mode = (payload.mode or "").strip().lower() or None
+    if requested_mode and requested_mode not in {"manual", "autopilot", "assist"}:
+        raise HTTPException(status_code=400, detail="Invalid autopilot mode")
+
+    ok = update_session_autopilot(
+        db,
+        session_id=session_id,
+        enabled=payload.enabled,
+        mode=requested_mode,
+    )
+    if not ok:
+        raise HTTPException(status_code=404, detail="Negotiation session not found")
+
+    updated = get_session_with_messages(db, session_id)
+    if not updated:
+        raise HTTPException(status_code=404, detail="Negotiation session not found")
+
+    publish_session_event(
+        session_id=session_id,
+        event_type="negotiation.autopilot.updated",
+        payload={
+            "enabled": bool(updated.autopilot_enabled),
+            "mode": updated.autopilot_mode,
+        },
+    )
+    return to_session_out(updated)
+
 @app.post("/negotiations/{session_id}/autonomous-round", response_model=EnqueueRoundResponse)
 def enqueue_autonomous_round(
     session_id: str,
@@ -336,6 +951,13 @@ def enqueue_autonomous_round(
         event_type="negotiation.round.queued",
         payload={"job_id": job.id, "queue": queue.name},
     )
+    update_session_status(
+        db,
+        session_id=session_id,
+        status="queued",
+        last_job_id=job.id,
+        last_job_status="queued",
+    )
     return EnqueueRoundResponse(
         session_id=session_id,
         job_id=job.id,
@@ -344,14 +966,164 @@ def enqueue_autonomous_round(
     )
 
 
+@app.post("/negotiations/{session_id}/simulate-reply")
+def simulate_inbound_reply(
+    session_id: str,
+    payload: SimulatedInboundRequest,
+    db: Session = Depends(get_db),
+) -> dict:
+    session = get_session_with_messages(db, session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Negotiation session not found")
+
+    channel = payload.channel.strip().lower()
+    if channel not in {"email", "sms", "voice"}:
+        channel = "email"
+
+    sender_identity = (payload.sender_identity or "").strip()
+    if not sender_identity:
+        sender_identity = "dealer@example.com" if channel == "email" else "+10000000000"
+
+    message = add_message(
+        db=db,
+        session_id=session_id,
+        direction="inbound",
+        channel=channel,
+        sender_identity=sender_identity,
+        body=payload.body.strip(),
+        metadata={"source": "ui-simulated"},
+    )
+    db.commit()
+    update_session_status(db, session_id=session_id, status="responded")
+
+    publish_session_event(
+        session_id=session_id,
+        event_type="negotiation.message.received",
+        payload={
+            "message_id": message.id,
+            "channel": channel,
+            "sender": sender_identity,
+            "body": message.body,
+            "source": "ui-simulated",
+        },
+    )
+
+    job_id: str | None = None
+    queue_name: str | None = None
+    autopilot_triggered = False
+    skip_reason: str | None = None
+
+    if bool(session.autopilot_enabled):
+        active_job_state = (session.last_job_status or "").strip().lower()
+        if active_job_state in {"queued", "started", "scheduled", "deferred", "running"}:
+            skip_reason = "job_in_progress"
+        else:
+            queue = get_queue()
+            ai_user_name = (payload.user_name or "").strip() or "Buyer"
+            job = queue.enqueue(run_autonomous_round, session_id, ai_user_name)
+            job_id = job.id
+            queue_name = queue.name
+            autopilot_triggered = True
+            update_session_status(
+                db,
+                session_id=session_id,
+                status="queued",
+                last_job_id=job.id,
+                last_job_status="queued",
+            )
+            publish_session_event(
+                session_id=session_id,
+                event_type="negotiation.round.queued",
+                payload={"job_id": job.id, "queue": queue.name, "source": "autopilot"},
+            )
+
+    return {
+        "status": "ok",
+        "message_id": message.id,
+        "session_id": session_id,
+        "autopilot_enabled": bool(session.autopilot_enabled),
+        "autopilot_mode": session.autopilot_mode,
+        "autopilot_triggered": autopilot_triggered,
+        "job_id": job_id,
+        "queue": queue_name,
+        "skip_reason": skip_reason,
+    }
+
+@app.get("/jobs/{job_id}", response_model=JobStatusResponse)
+def get_job_status(job_id: str) -> JobStatusResponse:
+    queue = get_queue()
+    try:
+        job = Job.fetch(job_id, connection=queue.connection)
+    except NoSuchJobError:
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    status = job.get_status(refresh=True) or "unknown"
+    kwargs = job.kwargs if isinstance(job.kwargs, dict) else {}
+
+    session_id = str(job.args[0]) if job.args else kwargs.get("session_id")
+    mapped = {
+        "queued": "queued",
+        "scheduled": "queued",
+        "deferred": "queued",
+        "started": "running",
+        "failed": "failed",
+        "stopped": "failed",
+        "canceled": "closed",
+    }
+    session_status = mapped.get(status)
+
+    if session_id:
+        db = SessionLocal()
+        try:
+            if session_status is None:
+                update_session_job_metadata(
+                    db,
+                    session_id=session_id,
+                    last_job_id=job.id,
+                    last_job_status=status,
+                )
+            else:
+                update_session_status(
+                    db,
+                    session_id=session_id,
+                    status=session_status,
+                    last_job_id=job.id,
+                    last_job_status=status,
+                )
+        finally:
+            db.close()
+
+    return JobStatusResponse(
+        job_id=job.id,
+        status=status,
+        queue=job.origin,
+        enqueued_at=job.enqueued_at.isoformat() if job.enqueued_at else None,
+        started_at=job.started_at.isoformat() if job.started_at else None,
+        ended_at=job.ended_at.isoformat() if job.ended_at else None,
+        session_id=session_id,
+        error=job.exc_info,
+    )
+
+
 def to_session_out(session) -> NegotiationSessionOut:
     return NegotiationSessionOut(
         id=session.id,
         user_id=session.user_id,
+        saved_search_id=session.saved_search_id,
+        offer_id=session.offer_id,
         dealership_id=session.dealership_id,
+        dealership_name=session.dealer.name if session.dealer else None,
         vehicle_id=session.vehicle_id,
+        vehicle_label=session.vehicle_label,
         status=session.status,
         best_offer_otd=float(session.best_offer_otd) if session.best_offer_otd is not None else None,
+        autopilot_enabled=bool(session.autopilot_enabled),
+        autopilot_mode=session.autopilot_mode,
+        last_job_id=session.last_job_id,
+        last_job_status=session.last_job_status,
+        last_job_at=session.last_job_at.isoformat() if session.last_job_at else None,
+        created_at=session.created_at.isoformat(),
+        updated_at=session.updated_at.isoformat(),
         messages=[
             NegotiationMessageOut(
                 id=message.id,
@@ -364,3 +1136,25 @@ def to_session_out(session) -> NegotiationSessionOut:
             for message in session.messages
         ],
     )
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

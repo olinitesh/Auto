@@ -4,12 +4,13 @@ from autohaggle_shared.communication_client import send_negotiation_email, send_
 from autohaggle_shared.database import SessionLocal
 from autohaggle_shared.events import publish_session_event
 from autohaggle_shared.negotiation import run_negotiation_strategy
-from autohaggle_shared.repository import add_message, get_session_with_messages
+from autohaggle_shared.repository import add_message, get_session_with_messages, update_session_status
 
 
 def run_autonomous_round(session_id: str, user_name: str) -> dict:
     db: Session = SessionLocal()
     try:
+        update_session_status(db, session_id=session_id, status="running", last_job_status="started")
         session = get_session_with_messages(db, session_id)
         if not session:
             return {"ok": False, "error": "session_not_found", "session_id": session_id}
@@ -49,6 +50,9 @@ def run_autonomous_round(session_id: str, user_name: str) -> dict:
         except Exception as exc:
             delivery = {"status": "error", "reason": str(exc)}
 
+        next_status = "responded" if decision["action"] == "counter_offer" else "closed"
+        update_session_status(db, session_id=session_id, status=next_status, last_job_status="finished")
+
         publish_session_event(
             session_id=session_id,
             event_type="negotiation.message.sent",
@@ -58,9 +62,13 @@ def run_autonomous_round(session_id: str, user_name: str) -> dict:
                 "channel": msg.channel,
                 "body": msg.body,
                 "delivery": delivery,
+                "session_status": next_status,
             },
         )
 
-        return {"ok": True, "session_id": session_id, "action": decision["action"]}
+        return {"ok": True, "session_id": session_id, "action": decision["action"], "status": next_status}
+    except Exception:
+        update_session_status(db, session_id=session_id, status="failed", last_job_status="failed")
+        raise
     finally:
         db.close()

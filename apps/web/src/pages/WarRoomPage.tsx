@@ -26,6 +26,7 @@ type NegotiationSessionDetail = {
 
 type WarRoomPageProps = {
   sessionId: string;
+  returnTo?: string;
 };
 
 const apiBase = "http://localhost:8000";
@@ -42,7 +43,7 @@ function formatEventTime(value?: string): string {
   return parsed.toLocaleString();
 }
 
-export function WarRoomPage({ sessionId }: WarRoomPageProps) {
+export function WarRoomPage({ sessionId, returnTo }: WarRoomPageProps) {
   const [events, setEvents] = useState<WarRoomEvent[]>([]);
   const [connected, setConnected] = useState(false);
   const [loadingHistory, setLoadingHistory] = useState(false);
@@ -141,7 +142,7 @@ export function WarRoomPage({ sessionId }: WarRoomPageProps) {
     <main className="comparison-page">
       <section className="hero warroom-hero">
         <p className="kicker">Negotiation Ops</p>
-        <h1>War Room Control Feed</h1>
+        <h1>Negotiation Command Center</h1>
         <p className="subtitle">Live events, history replay, and session telemetry for autonomous negotiation execution.</p>
         <div className="hero-meta">
           <span className={`pill ${connected ? "pill-live" : "pill-muted"}`}>{connected ? "Live Socket" : "Socket Offline"}</span>
@@ -155,6 +156,9 @@ export function WarRoomPage({ sessionId }: WarRoomPageProps) {
 
       <section className="panel warroom-toolbar">
         <div className="actions warroom-actions">
+          <a className="btn" href={returnTo || "/?workspace=offers"}>
+            Back To Workspace
+          </a>
           <button onClick={connect} className="btn primary" type="button">
             {connected ? "Connected" : "Connect Feed"}
           </button>
@@ -186,3 +190,4 @@ export function WarRoomPage({ sessionId }: WarRoomPageProps) {
     </main>
   );
 }
+

@@ -26,11 +26,19 @@ CREATE TABLE IF NOT EXISTS vehicle_listing (
 CREATE TABLE IF NOT EXISTS negotiation_session (
   id VARCHAR(36) PRIMARY KEY,
   user_id VARCHAR(36) NOT NULL,
-  vehicle_id VARCHAR(36) NOT NULL,
+  saved_search_id VARCHAR(36),
+  offer_id VARCHAR(128),
+  vehicle_id VARCHAR(128) NOT NULL,
+  vehicle_label VARCHAR(255),
   dealership_id VARCHAR(36) NOT NULL REFERENCES dealership(id),
   status VARCHAR(40) DEFAULT 'new',
   strategy_state JSONB,
   best_offer_otd NUMERIC(12,2),
+  autopilot_enabled BOOLEAN NOT NULL DEFAULT FALSE,
+  autopilot_mode VARCHAR(32) NOT NULL DEFAULT 'manual',
+  last_job_id VARCHAR(64),
+  last_job_status VARCHAR(32),
+  last_job_at TIMESTAMPTZ,
   created_at TIMESTAMPTZ DEFAULT now(),
   updated_at TIMESTAMPTZ DEFAULT now()
 );
@@ -71,3 +79,33 @@ CREATE TABLE IF NOT EXISTS offer_price_history (
   data_provider VARCHAR(80),
   seen_at TIMESTAMPTZ DEFAULT now()
 );
+
+CREATE TABLE IF NOT EXISTS saved_search (
+  id VARCHAR(36) PRIMARY KEY,
+  name VARCHAR(160) NOT NULL,
+  user_zip VARCHAR(12) NOT NULL,
+  radius_miles INT NOT NULL DEFAULT 100,
+  budget_otd NUMERIC(12,2) NOT NULL,
+  targets JSONB NOT NULL,
+  dealer_sites JSONB,
+  include_in_transit BOOLEAN NOT NULL DEFAULT TRUE,
+  include_pre_sold BOOLEAN NOT NULL DEFAULT FALSE,
+  include_hidden BOOLEAN NOT NULL DEFAULT FALSE,
+  created_at TIMESTAMPTZ DEFAULT now(),
+  updated_at TIMESTAMPTZ DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS saved_search_alert (
+  id VARCHAR(36) PRIMARY KEY,
+  saved_search_id VARCHAR(36) NOT NULL REFERENCES saved_search(id),
+  alert_type VARCHAR(40) NOT NULL,
+  dealership_id VARCHAR(64) NOT NULL,
+  vehicle_id VARCHAR(128) NOT NULL,
+  title VARCHAR(220) NOT NULL,
+  message TEXT NOT NULL,
+  metadata JSONB,
+  acknowledged BOOLEAN NOT NULL DEFAULT FALSE,
+  created_at TIMESTAMPTZ DEFAULT now(),
+  seen_at TIMESTAMPTZ DEFAULT now()
+);
+

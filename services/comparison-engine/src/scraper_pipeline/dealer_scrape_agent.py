@@ -323,15 +323,30 @@ class DealerSiteScrapeAgent:
         return httpx.Client(timeout=self.timeout_seconds, headers=self._toyota_graphql_headers())
 
     def _toyota_series_codes_from_targets(self, targets: list[dict]) -> str:
+        def add_code(codes: list[str], value: str) -> None:
+            if value and value not in codes:
+                codes.append(value)
+
         codes: list[str] = []
         for target in targets:
             make = str(target.get("make") or "").strip().lower()
             if make != "toyota":
                 continue
+
             raw_model = str(target.get("model") or "").strip().lower()
             code = re.sub(r"[^a-z0-9]", "", raw_model)
-            if code and code not in codes:
-                codes.append(code)
+            if not code:
+                continue
+
+            add_code(codes, code)
+
+            # Toyota woodland inventory commonly appears under hybrid series.
+            # Query both so model-level requests (e.g., "RAV4" + "Woodland") do not miss it.
+            if code == "rav4":
+                add_code(codes, "rav4hybrid")
+            elif code == "rav4hybrid":
+                add_code(codes, "rav4")
+
         return ",".join(codes)
 
     def _fetch_toyota_vehicle_summaries(
@@ -394,13 +409,11 @@ class DealerSiteScrapeAgent:
                         if not model_name:
                             continue
 
-                        listed_price = float(
-                            price_obj.get("sellingPrice")
-                            or price_obj.get("advertizedPrice")
-                            or price_obj.get("totalMsrp")
-                            or price_obj.get("baseMsrp")
-                            or 0.0
-                        )
+                        msrp = float(price_obj.get("totalMsrp") or price_obj.get("baseMsrp") or 0.0)
+                        advertised_price = float(price_obj.get("advertizedPrice") or price_obj.get("nonSpAdvertizedPrice") or 0.0)
+                        selling_price = float(price_obj.get("sellingPrice") or 0.0)
+                        listed_price = float(selling_price or advertised_price or msrp or 0.0)
+                        dealer_discount = max(0.0, (msrp - advertised_price)) if msrp > 0 and advertised_price > 0 else None
                         fees = float(price_obj.get("dph") or 0.0)
                         dio_msrp = float(price_obj.get("dioTotalMsrp") or 0.0)
                         dio_dealer = float(price_obj.get("dioTotalDealerSellingPrice") or 0.0)
@@ -424,6 +437,10 @@ class DealerSiteScrapeAgent:
                                 "model": model_name,
                                 "trim": str(model_obj.get("marketingTitle") or "").strip() or None,
                                 "listed_price": listed_price,
+                                "msrp": (msrp or None),
+                                "advertised_price": (advertised_price or None),
+                                "selling_price": (selling_price or None),
+                                "dealer_discount": dealer_discount,
                                 "fees": fees,
                                 "market_adjustment": market_adjustment,
                                 "mileage": self._safe_int(item.get("inventoryMileage")),
@@ -581,4 +598,9 @@ class DealerSiteScrapeAgent:
         if dealer_coords is None:
             return False
         return _haversine_miles(origin[0], origin[1], dealer_coords[0], dealer_coords[1]) <= float(radius_miles)
+
+
+
+
+
 

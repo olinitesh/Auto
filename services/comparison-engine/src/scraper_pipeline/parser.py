@@ -12,6 +12,15 @@ def _to_float(value: object, default: float = 0.0) -> float:
         return default
 
 
+def _to_optional_float(value: object) -> float | None:
+    try:
+        if value is None or value == "":
+            return None
+        return float(value)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return None
+
+
 def _to_int(value: object) -> int | None:
     try:
         if value is None or value == "":
@@ -48,6 +57,10 @@ class ListingParser:
             model=str(p.get("model") or "").strip(),
             trim=(str(p.get("trim")).strip() if p.get("trim") else None),
             listed_price=_to_float(p.get("listed_price")),
+            msrp=_to_optional_float(p.get("msrp")),
+            advertised_price=_to_optional_float(p.get("advertised_price") or p.get("advertized_price")),
+            selling_price=_to_optional_float(p.get("selling_price")),
+            dealer_discount=_to_optional_float(p.get("dealer_discount")),
             fees=_to_float(p.get("fees")),
             market_adjustment=_to_float(p.get("market_adjustment")),
             mileage=_to_int(p.get("mileage")),

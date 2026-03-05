@@ -1,0 +1,4 @@
+ALTER TABLE negotiation_session
+  ADD COLUMN IF NOT EXISTS last_job_id VARCHAR(64),
+  ADD COLUMN IF NOT EXISTS last_job_status VARCHAR(32),
+  ADD COLUMN IF NOT EXISTS last_job_at TIMESTAMPTZ;

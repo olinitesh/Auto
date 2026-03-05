@@ -12,7 +12,7 @@ endif
 
 RUN_PYTHON := $(if $(wildcard $(VENV_PYTHON)),$(VENV_PYTHON),$(PYTHON))
 
-.PHONY: bootstrap up test lint api worker communication warroom web fallback-ingest fallback-scheduler
+.PHONY: bootstrap up test lint migrate api worker communication warroom web web-prod fallback-ingest fallback-scheduler saved-search-scheduler autopilot-scheduler
 
 bootstrap:
 	$(PYTHON) scripts/dev/bootstrap.py
@@ -25,6 +25,9 @@ test:
 
 lint:
 	$(RUN_PYTHON) scripts/ci/lint.py
+
+migrate:
+	$(RUN_PYTHON) scripts/dev/migrate.py
 
 api:
 	$(RUN_PYTHON) scripts/dev/run-local.py
@@ -44,5 +47,15 @@ fallback-ingest:
 fallback-scheduler:
 	$(RUN_PYTHON) scripts/dev/run-fallback-scheduler.py
 
+saved-search-scheduler:
+	$(RUN_PYTHON) scripts/dev/run-saved-search-scheduler.py
+
+autopilot-scheduler:
+	$(RUN_PYTHON) scripts/dev/run-autopilot-scheduler.py
+
 web:
 	cd apps/web && npm install && npm run dev
+
+web-prod:
+	cd apps/web && npm ci && npm run build && npm run preview -- --host 127.0.0.1 --port 5173
+

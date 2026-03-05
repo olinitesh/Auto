@@ -1,0 +1,3 @@
+ALTER TABLE negotiation_session
+  ADD COLUMN IF NOT EXISTS autopilot_enabled BOOLEAN NOT NULL DEFAULT FALSE,
+  ADD COLUMN IF NOT EXISTS autopilot_mode VARCHAR(32) NOT NULL DEFAULT 'manual';

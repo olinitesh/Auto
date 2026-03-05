@@ -1838,7 +1838,7 @@ export function ComparisonPage() {
       <div className={`sticky-top-stack ${headerStackScrolled ? "scrolled" : ""}`.trim()}>
       <section className="hero">
         <p className="kicker">AutoHaggle</p>
-        <h1>Auto Deal Dashboard</h1>
+        <h1>Find and rank dealer offers before negotiation</h1>
         <p className="subtitle">
           Search live listings, include incoming/hidden inventory if needed, and rank by price, specs, and fees.
         </p>

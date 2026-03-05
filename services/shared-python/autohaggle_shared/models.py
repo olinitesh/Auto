@@ -1,7 +1,7 @@
 from datetime import datetime
 from uuid import uuid4
 
-from sqlalchemy import JSON, DateTime, ForeignKey, Numeric, String, Text, UniqueConstraint
+from sqlalchemy import JSON, Boolean, DateTime, ForeignKey, Numeric, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from autohaggle_shared.database import Base
@@ -67,16 +67,57 @@ class OfferPriceHistory(Base):
     data_provider: Mapped[str | None] = mapped_column(String(80), nullable=True)
     seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow)
 
+class SavedSearch(Base):
+    __tablename__ = "saved_search"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    name: Mapped[str] = mapped_column(String(160), nullable=False)
+    user_zip: Mapped[str] = mapped_column(String(12), nullable=False)
+    radius_miles: Mapped[int] = mapped_column(nullable=False, default=100)
+    budget_otd: Mapped[float] = mapped_column(Numeric(12, 2), nullable=False)
+    targets: Mapped[list[dict]] = mapped_column(JSON, nullable=False)
+    dealer_sites: Mapped[list[dict] | None] = mapped_column(JSON, nullable=True)
+    include_in_transit: Mapped[bool] = mapped_column(nullable=False, default=True)
+    include_pre_sold: Mapped[bool] = mapped_column(nullable=False, default=False)
+    include_hidden: Mapped[bool] = mapped_column(nullable=False, default=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=datetime.utcnow,
+        onupdate=datetime.utcnow,
+    )
+class SavedSearchAlert(Base):
+    __tablename__ = "saved_search_alert"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    saved_search_id: Mapped[str] = mapped_column(ForeignKey("saved_search.id"), nullable=False)
+    alert_type: Mapped[str] = mapped_column(String(40), nullable=False)
+    dealership_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    vehicle_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    title: Mapped[str] = mapped_column(String(220), nullable=False)
+    message: Mapped[str] = mapped_column(Text, nullable=False)
+    metadata_json: Mapped[dict | None] = mapped_column("metadata", JSON, nullable=True)
+    acknowledged: Mapped[bool] = mapped_column(nullable=False, default=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow)
+    seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow)
 class NegotiationSession(Base):
     __tablename__ = "negotiation_session"
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
     user_id: Mapped[str] = mapped_column(String(36), nullable=False)
-    vehicle_id: Mapped[str] = mapped_column(String(36), nullable=False)
+    saved_search_id: Mapped[str | None] = mapped_column(ForeignKey("saved_search.id"), nullable=True)
+    offer_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    vehicle_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    vehicle_label: Mapped[str | None] = mapped_column(String(255), nullable=True)
     dealership_id: Mapped[str] = mapped_column(ForeignKey("dealership.id"), nullable=False)
     status: Mapped[str] = mapped_column(String(40), default="new")
     strategy_state: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     best_offer_otd: Mapped[float | None] = mapped_column(Numeric(12, 2), nullable=True)
+    autopilot_enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    autopilot_mode: Mapped[str] = mapped_column(String(32), nullable=False, default="manual")
+    last_job_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    last_job_status: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    last_job_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
@@ -101,3 +142,6 @@ class NegotiationMessage(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow)
 
     session: Mapped[NegotiationSession] = relationship(back_populates="messages")
+
+
+

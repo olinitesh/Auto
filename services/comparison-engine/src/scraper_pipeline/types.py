@@ -23,6 +23,10 @@ class ParsedListing:
     model: str
     trim: str | None
     listed_price: float
+    msrp: float | None
+    advertised_price: float | None
+    selling_price: float | None
+    dealer_discount: float | None
     fees: float
     market_adjustment: float
     mileage: int | None
@@ -50,6 +54,10 @@ class NormalizedListing:
     model: str
     trim: str | None
     listed_price: float
+    msrp: float | None
+    advertised_price: float | None
+    selling_price: float | None
+    dealer_discount: float | None
     fees: float
     market_adjustment: float
     otd_price: float

@@ -111,7 +111,7 @@ service_target_for() {
     worker) echo "worker" ;;
     communication) echo "communication" ;;
     warroom) echo "warroom" ;;
-    web) echo "web" ;;
+    web) echo "web-prod" ;;
     *) log "Unknown service name: $name"; exit 1 ;;
   esac
 }
@@ -260,3 +260,4 @@ main() {
 }
 
 main "$@"
+

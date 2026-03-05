@@ -7,6 +7,12 @@ def _title_case(value: str) -> str:
     return " ".join(part.capitalize() for part in value.strip().split())
 
 
+def _round_or_none(value: float | None) -> float | None:
+    if value is None:
+        return None
+    return round(value, 2)
+
+
 class ListingNormalizer:
     """Normalizes parsed listing values and computes derived totals."""
 
@@ -43,6 +49,10 @@ class ListingNormalizer:
             model=model,
             trim=trim,
             listed_price=round(parsed.listed_price, 2),
+            msrp=_round_or_none(parsed.msrp),
+            advertised_price=_round_or_none(parsed.advertised_price),
+            selling_price=_round_or_none(parsed.selling_price),
+            dealer_discount=_round_or_none(parsed.dealer_discount),
             fees=round(parsed.fees, 2),
             market_adjustment=round(parsed.market_adjustment, 2),
             otd_price=otd_price,
