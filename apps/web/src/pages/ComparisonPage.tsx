@@ -268,7 +268,7 @@ type PersistedSearchState = {
   expandedHistoryKeys: Record<string, boolean>;
 };
 
-const apiBase = "http://localhost:8000";
+const apiBase = (import.meta.env.VITE_API_BASE_URL as string | undefined)?.replace(/\/$/, "") || "/api";
 
 const SEARCH_STATE_STORAGE_KEY = "autohaggle:comparison-search-state:v1";
 const COPILOT_NUDGE_STORAGE_KEY = "autohaggle:copilot-nudge-dismissed:v1";
@@ -3058,84 +3058,4 @@ export function ComparisonPage() {
     </main>
   );
 }
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 

@@ -29,7 +29,7 @@ type WarRoomPageProps = {
   returnTo?: string;
 };
 
-const apiBase = "http://localhost:8000";
+const apiBase = (import.meta.env.VITE_API_BASE_URL as string | undefined)?.replace(/\/$/, "") || "/api";
 
 function formatEventTime(value?: string): string {
   if (!value) {
@@ -51,7 +51,15 @@ export function WarRoomPage({ sessionId, returnTo }: WarRoomPageProps) {
   const [sessionStatus, setSessionStatus] = useState<string | null>(null);
   const socketRef = useRef<WebSocket | null>(null);
 
-  const wsUrl = useMemo(() => `ws://localhost:8020/ws/negotiations/${sessionId}`, [sessionId]);
+  const wsUrl = useMemo(() => {
+    const base = (import.meta.env.VITE_WS_BASE_URL as string | undefined)?.replace(/\/$/, "");
+    if (base) {
+      return `${base}/ws/negotiations/${sessionId}`;
+    }
+
+    const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
+    return `${protocol}//${window.location.host}/ws/negotiations/${sessionId}`;
+  }, [sessionId]);
 
   const inboundCount = useMemo(
     () => events.filter((event) => event.event_type.toLowerCase().includes("inbound")).length,
