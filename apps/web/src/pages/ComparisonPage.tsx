@@ -620,6 +620,7 @@ export function ComparisonPage() {
   const [copilotDrawerOpen, setCopilotDrawerOpen] = useState(false);
   const [copilotNudgeVisible, setCopilotNudgeVisible] = useState(false);
   const [headerStackScrolled, setHeaderStackScrolled] = useState(false);
+  const [showScrollTopButton, setShowScrollTopButton] = useState(false);
   const copilotDrawerThreadRef = useRef<HTMLDivElement | null>(null);
   const [chatSuggestions, setChatSuggestions] = useState<string[]>([]);
   const [chatMessages, setChatMessages] = useState<AssistantChatMessage[]>(() => [createCopilotWelcomeMessage()]);
@@ -884,6 +885,7 @@ export function ComparisonPage() {
         }
         return y > ENTER_THRESHOLD;
       });
+      setShowScrollTopButton(y > 260);
     };
 
     onScroll();
@@ -2036,6 +2038,10 @@ export function ComparisonPage() {
   function dismissCopilotNudge(): void {
     setCopilotNudgeVisible(false);
     window.sessionStorage.setItem(COPILOT_NUDGE_STORAGE_KEY, "1");
+  }
+
+  function scrollToTop(): void {
+    window.scrollTo({ top: 0, behavior: "smooth" });
   }
 
   function startNewCopilotChat(): void {
@@ -3352,9 +3358,19 @@ export function ComparisonPage() {
         </div>
       )}
 
+      {showScrollTopButton && (
+        <button className="scroll-top-fab" type="button" onClick={scrollToTop} aria-label="Scroll to top" title="Scroll to top">
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M12 5l6 7h-4v7h-4v-7H6z" />
+          </svg>
+        </button>
+      )}
+
       <button
         className={`copilot-fab ${copilotDrawerOpen ? "active" : ""}`.trim()}
         type="button"
+        aria-label="Open AI Copilot"
+        title="AI Copilot"
         onClick={() => {
           if (copilotDrawerOpen) {
             setCopilotDrawerOpen(false);
@@ -3363,7 +3379,9 @@ export function ComparisonPage() {
           openCopilotDrawer();
         }}
       >
-        AI
+        <svg className="copilot-fab-icon" viewBox="0 0 24 24" aria-hidden="true">
+          <path d="M12 3a5 5 0 015 5v1.2a4 4 0 012 3.5V16a3 3 0 01-3 3h-1.2a4.9 4.9 0 01-5.6 0H8a3 3 0 01-3-3v-3.3a4 4 0 012-3.5V8a5 5 0 015-5zm0 2.4A2.6 2.6 0 009.4 8v1h5.2V8A2.6 2.6 0 0012 5.4zM9.6 13a1.2 1.2 0 101.2 1.2A1.2 1.2 0 009.6 13zm4.8 0a1.2 1.2 0 101.2 1.2 1.2 1.2 0 00-1.2-1.2z" />
+        </svg>
       </button>
     </main>
   );
