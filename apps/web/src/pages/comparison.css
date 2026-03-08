@@ -1099,6 +1099,14 @@ select:focus {
   margin-top: 10px;
 }
 
+.copilot-style-toggle {
+  min-width: 180px;
+}
+
+.copilot-style-toggle select {
+  min-width: 140px;
+}
+
 .copilot-meta {
   margin-top: 8px;
   display: flex;

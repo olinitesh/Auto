@@ -275,13 +275,16 @@ const apiBase = (import.meta.env.VITE_API_BASE_URL as string | undefined)?.repla
 const SEARCH_STATE_STORAGE_KEY = "autohaggle:comparison-search-state:v1";
 const COPILOT_NUDGE_STORAGE_KEY = "autohaggle:copilot-nudge-dismissed:v1";
 const UI_THEME_STORAGE_KEY = "autohaggle:ui-theme:v1";
+const COPILOT_RESPONSE_STYLE_STORAGE_KEY = "autohaggle:copilot-response-style:v1";
+const COPILOT_HISTORY_LIMIT = 10;
+const COPILOT_CONTEXT_RANK_LIMIT = 8;
 
 function createCopilotWelcomeMessage(): AssistantChatMessage {
   return {
     id: `copilot-welcome-${Date.now()}`,
     role: "assistant",
     content:
-      "I can help compare offers, explain ranking signals, and draft negotiation language. Ask me about your current results.",
+      "I can analyze your offers, explain ranking tradeoffs, and draft negotiation messages. Ask for a shortlist, risk check, or outreach draft.",
     createdAt: new Date().toISOString(),
     citedOfferIds: [],
     checkedUrls: [],
@@ -438,6 +441,49 @@ function parseUiTheme(value: string | null): UiTheme {
   return "neon";
 }
 
+function parseCopilotResponseStyle(value: string | null): "concise" | "detailed" {
+  return value === "detailed" ? "detailed" : "concise";
+}
+
+function safeGetLocalStorageValue(key: string): string | null {
+  try {
+    return window.localStorage.getItem(key);
+  } catch {
+    return null;
+  }
+}
+
+function uniqueSuggestions(items: string[]): string[] {
+  const seen = new Set<string>();
+  const result: string[] = [];
+
+  for (const raw of items) {
+    const value = (raw ?? "").trim();
+    if (!value) {
+      continue;
+    }
+    const key = value.toLowerCase();
+    if (seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+    result.push(value);
+    if (result.length >= 6) {
+      break;
+    }
+  }
+
+  return result;
+}
+
+function defaultCopilotSuggestions(): string[] {
+  return [
+    "Which top 3 offers are best value and why?",
+    "Draft a negotiation opener for the best-ranked offer.",
+    "What are the risk flags in my current shortlist?",
+  ];
+}
+
 export function ComparisonPage() {
   const [userZip, setUserZip] = useState("18706");
   const [radiusMiles, setRadiusMiles] = useState(100);
@@ -451,7 +497,10 @@ export function ComparisonPage() {
     parseWorkspaceView(initialUrlParams.get("workspace")),
   );
   const [searchStateHydrated, setSearchStateHydrated] = useState(false);
-  const [uiTheme, setUiTheme] = useState<UiTheme>(() => parseUiTheme(window.localStorage.getItem(UI_THEME_STORAGE_KEY)));
+  const [uiTheme, setUiTheme] = useState<UiTheme>(() => parseUiTheme(safeGetLocalStorageValue(UI_THEME_STORAGE_KEY)));
+  const [copilotResponseStyle, setCopilotResponseStyle] = useState<"concise" | "detailed">(() =>
+    parseCopilotResponseStyle(safeGetLocalStorageValue(COPILOT_RESPONSE_STYLE_STORAGE_KEY)),
+  );
 
   const modelOptions = useMemo(() => MAKE_MODEL_OPTIONS[make] ?? [], [make]);
 
@@ -478,6 +527,14 @@ export function ComparisonPage() {
       // Ignore localStorage failures.
     }
   }, [uiTheme]);
+
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(COPILOT_RESPONSE_STYLE_STORAGE_KEY, copilotResponseStyle);
+    } catch {
+      // Ignore localStorage failures.
+    }
+  }, [copilotResponseStyle]);
 
   useEffect(() => {
     const persisted = loadPersistedSearchState();
@@ -1082,6 +1139,10 @@ export function ComparisonPage() {
 
     const assistantMessageId = `assistant-${Date.now()}-${Math.random().toString(16).slice(2, 8)}`;
     const nextHistory = [...chatMessages, nextUserMessage];
+    const historyForApi = nextHistory
+      .filter((item) => item.role === "user" || (item.role === "assistant" && item.content.trim().length > 0))
+      .slice(-COPILOT_HISTORY_LIMIT)
+      .map((item) => ({ role: item.role, content: item.content }));
 
     setChatMessages([
       ...nextHistory,
@@ -1110,17 +1171,37 @@ export function ComparisonPage() {
     };
 
     try {
+      const styleInstruction =
+        copilotResponseStyle === "detailed"
+          ? "Provide a thorough answer with short sections, clear reasoning, and concrete next actions."
+          : "Keep the answer concise and actionable in 3-6 sentences unless the user asks for more detail.";
+
       const response = await fetch(`${apiBase}/assistant/chat/stream`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           message,
-          history: nextHistory.map((item) => ({ role: item.role, content: item.content })),
+          history: historyForApi,
           context: {
             budget_otd: budgetOtd,
-            offers,
-            ranked_offers: rankedOffers,
+            search_target: targetPreview,
+            active_filters: {
+              dealer: resultDealerFilter,
+              trim: resultTrimFilter,
+              include_in_transit: includeInTransit,
+              include_pre_sold: includePreSold,
+              include_hidden: includeHidden,
+            },
+            counts: {
+              offers: offers.length,
+              ranked: rankedOffers.length,
+              filtered_offers: filteredOffers.length,
+              filtered_ranked: filteredRankedOffers.length,
+            },
+            ranked_offers: filteredRankedOffers.slice(0, COPILOT_CONTEXT_RANK_LIMIT),
           },
+          client_instructions: `${styleInstruction} When suggesting negotiation language, provide a ready-to-send draft with clear next step.`,
+          response_style: copilotResponseStyle,
           use_live_web: copilotUseLiveWeb,
         }),
       });
@@ -1137,7 +1218,7 @@ export function ComparisonPage() {
           checkedUrls: Array.isArray(fallback.checked_urls) ? fallback.checked_urls : [],
           model: fallback.model,
         });
-        setChatSuggestions(Array.isArray(fallback.suggestions) ? fallback.suggestions : []);
+        setChatSuggestions(uniqueSuggestions(Array.isArray(fallback.suggestions) ? fallback.suggestions : defaultCopilotSuggestions()));
         return;
       }
 
@@ -1146,6 +1227,7 @@ export function ComparisonPage() {
       let buffer = "";
       let streamedText = "";
 
+      let gotDoneEvent = false;
       while (true) {
         const { done, value } = await reader.read();
         if (done) {
@@ -1188,6 +1270,7 @@ export function ComparisonPage() {
               updateAssistantMessage({ content: streamedText });
             }
           } else if (eventName === "done") {
+            gotDoneEvent = true;
             const finalAnswer = typeof parsed.answer === "string" ? parsed.answer : streamedText;
             const finalSuggestions = Array.isArray(parsed.suggestions)
               ? parsed.suggestions.filter((item): item is string => typeof item === "string")
@@ -1206,9 +1289,15 @@ export function ComparisonPage() {
               checkedUrls: finalCheckedUrls,
               model: finalModel,
             });
-            setChatSuggestions(finalSuggestions);
+            setChatSuggestions(uniqueSuggestions(finalSuggestions));
           }
         }
+      }
+
+      if (!gotDoneEvent) {
+        const fallbackAnswer = streamedText.trim() || "I could not generate a complete response. Please retry.";
+        updateAssistantMessage({ content: fallbackAnswer });
+        setChatSuggestions((prev) => (prev.length > 0 ? prev : defaultCopilotSuggestions()));
       }
     } catch (err) {
       updateAssistantMessage({
@@ -1216,6 +1305,7 @@ export function ComparisonPage() {
         citedOfferIds: [],
         checkedUrls: [],
       });
+      setChatSuggestions(defaultCopilotSuggestions());
     } finally {
       setChatLoading(false);
     }
@@ -2127,6 +2217,16 @@ export function ComparisonPage() {
                   onChange={(e) => setCopilotUseLiveWeb(e.target.checked)}
                 />
                 Use live web data
+              </label>
+              <label className="toggle copilot-style-toggle">
+                Response Style
+                <select
+                  value={copilotResponseStyle}
+                  onChange={(e) => setCopilotResponseStyle((e.target.value as "concise" | "detailed") || "concise")}
+                >
+                  <option value="concise">Concise</option>
+                  <option value="detailed">Detailed</option>
+                </select>
               </label>
               <button className="btn primary" type="submit" disabled={chatLoading || !chatInput.trim()}>
                 {chatLoading ? "Thinking..." : "Send"}
@@ -3224,6 +3324,16 @@ export function ComparisonPage() {
                 onChange={(e) => setCopilotUseLiveWeb(e.target.checked)}
               />
               Use live web data
+            </label>
+            <label className="toggle copilot-style-toggle">
+              Response Style
+              <select
+                value={copilotResponseStyle}
+                onChange={(e) => setCopilotResponseStyle((e.target.value as "concise" | "detailed") || "concise")}
+              >
+                <option value="concise">Concise</option>
+                <option value="detailed">Detailed</option>
+              </select>
             </label>
             <button className="btn primary" type="submit" disabled={chatLoading || !chatInput.trim()}>
               {chatLoading ? "Thinking..." : "Send"}
