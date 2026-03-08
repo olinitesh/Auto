@@ -85,12 +85,28 @@ curl -X PATCH "http://localhost:8000/negotiations/<session_id>/autopilot" -H "Co
 curl -X POST "http://localhost:8000/negotiations/<session_id>/simulate-reply" -H "Content-Type: application/json" --data-raw '{"channel":"email","sender_identity":"dealer@example.com","user_name":"Buyer","body":"We can do 31250 OTD."}'
 ```
 
+## Proxmox Deployment
+- Full install + deploy guide: `docs/runbooks/proxmox-install-deploy.md`
+- Script-based deploy guide: `docs/runbooks/proxmox-deploy.md`
+- Python package list: `requirements.txt`
+
+Quick start:
+```bash
+sudo apt-get update
+sudo apt-get install -y ca-certificates curl git make build-essential python3 python3-venv python3-pip nodejs npm
+cd /opt
+git clone -b main git@github.com:olinitesh/Auto.git autohaggle
+cd /opt/autohaggle
+chmod +x scripts/deploy/proxmox-deploy.sh
+INSTALL_NGINX=1 ./scripts/deploy/proxmox-deploy.sh
+```
 ## Troubleshooting
 - `make: python: No such file or directory`: run `make PYTHON=python3 bootstrap`.
 - WSL Docker missing: enable Docker Desktop WSL integration.
 - UI "Failed to fetch": verify API at `http://localhost:8000/health`.
 - `UndefinedColumn` (e.g., `saved_search_id` in `negotiation_session`): run `make migrate`, then restart `make api`.
 - MarketCheck `429`: wait 30-90 seconds; adapter retries with backoff and bounded request fan-out.
+
 
 
 

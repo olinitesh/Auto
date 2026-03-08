@@ -9,51 +9,74 @@ Install and deploy AutoHaggle on a Proxmox Ubuntu VM for local LAN usage.
 - Bridged network and a stable VM IP address
 - User with `sudo` access
 
-## Prerequisites in VM
+## System Packages (install first)
+Run one line at a time:
+
 ```bash
 sudo apt-get update
-sudo apt-get install -y git curl
+sudo apt-get install -y ca-certificates curl git make build-essential python3 python3-venv python3-pip nodejs npm
 ```
 
-## Repository Access (Fix 403 Errors)
-If you see:
-`remote: Write access to repository not granted` or `fatal: ... 403`
-then your VM auth is not authorized for that GitHub repo.
+Note:
+- `make` is required before running `scripts/deploy/proxmox-deploy.sh`.
+- `nodejs` + `npm` are required for `autohaggle-web` service (`make web-prod`).
 
-Use one of these methods:
+## Repository Access (fix GitHub 403)
+If you see `Write access to repository not granted` or `403`, use valid repo auth.
 
-1. SSH key (recommended)
+### Option A: SSH key (recommended)
 ```bash
 ssh-keygen -t ed25519 -C "proxmox-autohaggle"
 cat ~/.ssh/id_ed25519.pub
 ```
-Add the public key to GitHub (user key or deploy key), then:
+Add the public key to GitHub (account key or deploy key), then:
 ```bash
 git remote set-url origin git@github.com:olinitesh/Auto.git
 ssh -T git@github.com
 ```
 
-2. HTTPS + PAT
-- Create a GitHub Personal Access Token with repo access.
-- Use a credential helper and authenticate when prompted.
+### Option B: HTTPS with PAT
+- Create a GitHub PAT with repo access.
+- Authenticate `git clone`/`git pull` using that PAT.
 
 ## Clone Repository
 ```bash
 sudo mkdir -p /opt
-authorized_user="$USER"
-sudo chown -R "$authorized_user":"$authorized_user" /opt
+sudo chown -R "$USER":"$USER" /opt
 cd /opt
 git clone -b main git@github.com:olinitesh/Auto.git autohaggle
 cd /opt/autohaggle
 ```
 
-## Deploy
+## Python Dependencies
+Use either workflow:
+
+### Preferred (repo standard)
+```bash
+make bootstrap
+```
+
+### Manual fallback
+```bash
+python3 -m venv .venv
+. .venv/bin/activate
+python -m pip install --upgrade pip
+python -m pip install -r requirements.txt
+```
+
+## Start Infrastructure
+```bash
+docker compose up -d postgres redis
+docker compose ps
+```
+
+## Deploy Application (scripted)
 ```bash
 chmod +x scripts/deploy/proxmox-deploy.sh
 INSTALL_NGINX=1 ./scripts/deploy/proxmox-deploy.sh
 ```
 
-First-time clone using script directly:
+First-time deploy with clone inside script:
 ```bash
 REPO_URL=git@github.com:olinitesh/Auto.git REPO_BRANCH=main INSTALL_NGINX=1 ./scripts/deploy/proxmox-deploy.sh
 ```
@@ -69,24 +92,32 @@ Set at minimum:
 - `TWILIO_*` (if communication flows enabled)
 - `SENDGRID_*` (if notifications enabled)
 
-Restart services after updates:
+Restart after env updates:
 ```bash
-sudo systemctl restart autohaggle-api autohaggle-worker autohaggle-communication autohaggle-warroom autohaggle-web
+sudo systemctl restart autohaggle-api
+sudo systemctl restart autohaggle-worker
+sudo systemctl restart autohaggle-communication
+sudo systemctl restart autohaggle-warroom
+sudo systemctl restart autohaggle-web
+sudo systemctl restart nginx
 ```
 
 ## Verify Deployment
 ```bash
-sudo systemctl status autohaggle-api autohaggle-web --no-pager
+sudo systemctl status autohaggle-api autohaggle-web nginx --no-pager
 curl -f http://127.0.0.1:8000/health
+curl -I http://127.0.0.1:5173
+curl -I http://127.0.0.1/
 ```
 Open from LAN browser:
 - `http://<vm-ip>/`
 
 ## Useful Operations
-View logs:
+Tail logs:
 ```bash
 sudo journalctl -u autohaggle-api -f
 sudo journalctl -u autohaggle-web -f
+sudo journalctl -u nginx -f
 ```
 
 Redeploy latest code:
@@ -97,6 +128,33 @@ INSTALL_NGINX=1 ./scripts/deploy/proxmox-deploy.sh
 ```
 
 ## Troubleshooting
-- Port 80 unreachable: verify VM firewall and Proxmox network bridge.
-- 403 on git pull/clone: fix GitHub auth (SSH key or PAT).
-- Service boot loop: inspect `journalctl` for the failing unit.
+### `make: command not found`
+```bash
+sudo apt-get update
+sudo apt-get install -y make
+```
+
+### `npm: not found` in `autohaggle-web`
+```bash
+sudo apt-get update
+sudo apt-get install -y nodejs npm
+sudo systemctl restart autohaggle-web
+```
+
+### API DB errors (`psycopg OperationalError`)
+```bash
+cd /opt/autohaggle
+docker compose up -d postgres redis
+docker compose logs --tail=120 postgres
+sudo systemctl restart autohaggle-api
+```
+
+### 502 from Nginx
+```bash
+sudo systemctl status autohaggle-api autohaggle-web --no-pager
+sudo journalctl -u nginx -n 120 --no-pager
+```
+
+### Frontend `Failed to fetch`
+- Ensure frontend uses proxied endpoints (`/api`, `/ws`) in latest code.
+- Hard refresh browser after web restart (`Ctrl+Shift+R`).

@@ -618,7 +618,9 @@ select:focus {
   }
 
   .sticky-top-stack {
-    top: 6px;
+    position: static;
+    top: auto;
+    z-index: auto;
   }
 
   .hero,
@@ -628,16 +630,17 @@ select:focus {
   }
 
   .hero {
-    padding-top: 56px;
+    padding-top: 12px;
   }
 
   .hero-toolbar {
-    top: 10px;
-    right: 10px;
+    position: static;
+    margin-top: 10px;
+    justify-content: flex-start;
   }
 
   .theme-select {
-    min-width: 140px;
+    min-width: 100%;
   }
 
   .hero h1 {
@@ -1026,6 +1029,7 @@ select:focus {
     width: calc(100vw - 24px);
   }
 }
+
 
 
 
