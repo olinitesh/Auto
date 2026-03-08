@@ -301,7 +301,15 @@ def _build_assistant_messages(payload: AssistantChatRequest) -> tuple[list[dict[
     system_text = (
         "You are AutoHaggle Copilot. Use the provided context and any fetched live pages. "
         "If live pages are empty, say you could not fetch dealer pages for this request. "
-        "Give concise, actionable dealership guidance. "
+        "Always answer in a structured bullet format and avoid long paragraphs. "
+        "Use this exact response layout:\n"
+        "Summary:\n"
+        "- <1-2 concise bullets>\n"
+        "Recommended Actions:\n"
+        "- <2-4 actionable bullets>\n"
+        "Negotiation Script:\n"
+        "- <1-2 copy-ready lines the user can send>\n"
+        "Keep each bullet short and concrete. "
         "If evidence comes from specific offers, include the final line exactly in this format: "
         "CITED_IDS: offer_id_1,offer_id_2 . "
         "If no citation, use CITED_IDS: none"
@@ -374,7 +382,9 @@ def _build_fallback_assistant_answer(payload: AssistantChatRequest) -> Assistant
 
     if not top_offer:
         return AssistantChatResponse(
-            answer="I do not have offer data yet. Run Search + Rank first, then ask again.",
+            answer=("Summary:\n- I do not have offer data yet.\n"
+                "Recommended Actions:\n- Run Search and Rank first.\n- Ask again after offers are loaded.\n"
+                "Negotiation Script:\n- Not available until offers are loaded."),
             suggestions=_assistant_suggestions(message),
             cited_offer_ids=[],
             checked_urls=[],
@@ -394,17 +404,35 @@ def _build_fallback_assistant_answer(payload: AssistantChatRequest) -> Assistant
     if "negot" in lowered or "email" in lowered or "message" in lowered:
         anchor = max(1.0, top_offer.otd_price - max(300.0, top_offer.otd_price * 0.015))
         answer = (
-            f"Recommended anchor is {_format_money(anchor)} for {top_offer.vehicle_label} at {top_offer.dealership_name}. "
-            f"Use: \"I can buy this week at {_format_money(anchor)} OTD if we finalize today.\""
+            "Summary:\n"
+            f"- Best immediate anchor is {_format_money(anchor)} for {top_offer.vehicle_label}.\n"
+            "Recommended Actions:\n"
+            f"- Start with {top_offer.dealership_name} and present {_format_money(anchor)} OTD as same-week close.\n"
+            "- Ask for itemized OTD and expiration date in writing.\n"
+            "Negotiation Script:\n"
+            f"- I can buy this week at {_format_money(anchor)} OTD if we finalize today."
         )
     elif "dom" in lowered or "risk" in lowered or "trend" in lowered:
         dom = top_offer.days_on_market or 0
         risk = "LOW" if dom < 20 else "MEDIUM" if dom < 45 else "HIGH"
-        answer = f"Top-offer DOM risk is {risk} (DOM {dom}d).{delta_text}"
+        answer = (
+            "Summary:\n"
+            f"- Top-offer DOM risk is {risk} (DOM {dom}d).{delta_text}\n"
+            "Recommended Actions:\n"
+            "- Prioritize dealers with higher DOM and recent price drops.\n"
+            "- Ask for a same-day decision window to capture urgency.\n"
+            "Negotiation Script:\n"
+            "- Given market time on this unit, I can close today if we agree on a sharper OTD."
+        )
     else:
         answer = (
-            f"Best current candidate is {top_offer.vehicle_label} at {top_offer.dealership_name} "
-            f"for {_format_money(top_offer.otd_price)} OTD.{delta_text}"
+            "Summary:\n"
+            f"- Best current candidate is {top_offer.vehicle_label} at {top_offer.dealership_name} for {_format_money(top_offer.otd_price)} OTD.{delta_text}\n"
+            "Recommended Actions:\n"
+            "- Use this offer as anchor and request written OTD breakdown.\n"
+            "- Ask two competing dealers to beat this OTD by a fixed amount.\n"
+            "Negotiation Script:\n"
+            f"- I have a written {_format_money(top_offer.otd_price)} OTD offer; if you can beat it, I can finalize today."
         )
 
     return AssistantChatResponse(
@@ -1136,6 +1164,7 @@ def to_session_out(session) -> NegotiationSessionOut:
             for message in session.messages
         ],
     )
+
 
 
 

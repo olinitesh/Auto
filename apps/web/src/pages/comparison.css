@@ -912,6 +912,7 @@ select:focus {
   margin: 0;
   color: #d8ebff;
   line-height: 1.45;
+  white-space: pre-wrap;
 }
 
 .copilot-suggestions {
@@ -1029,6 +1030,7 @@ select:focus {
     width: calc(100vw - 24px);
   }
 }
+
 
 
 
