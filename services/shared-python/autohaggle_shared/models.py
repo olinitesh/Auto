@@ -115,6 +115,8 @@ class NegotiationSession(Base):
     best_offer_otd: Mapped[float | None] = mapped_column(Numeric(12, 2), nullable=True)
     autopilot_enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     autopilot_mode: Mapped[str] = mapped_column(String(32), nullable=False, default="manual")
+    playbook: Mapped[str] = mapped_column(String(32), nullable=False, default="balanced")
+    playbook_policy: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     last_job_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
     last_job_status: Mapped[str | None] = mapped_column(String(32), nullable=True)
     last_job_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

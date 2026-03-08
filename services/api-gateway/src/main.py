@@ -128,6 +128,50 @@ def _dom_bucket(days: int | None) -> str | None:
 OPENAI_BASE_URL = os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1")
 OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4.1-mini")
 
+NEGOTIATION_PLAYBOOK_POLICIES: dict[str, dict[str, float | int | str]] = {
+    "aggressive": {
+        "target_offset": -450.0,
+        "concession_step": 150.0,
+        "max_rounds": 6,
+        "walk_away_buffer": 300.0,
+        "tone": "firm",
+    },
+    "balanced": {
+        "target_offset": -250.0,
+        "concession_step": 250.0,
+        "max_rounds": 5,
+        "walk_away_buffer": 200.0,
+        "tone": "neutral",
+    },
+    "conservative": {
+        "target_offset": -100.0,
+        "concession_step": 350.0,
+        "max_rounds": 4,
+        "walk_away_buffer": 120.0,
+        "tone": "collaborative",
+    },
+}
+
+
+def _resolve_playbook(playbook: str | None) -> tuple[str, dict[str, float | int | str]]:
+    key = (playbook or "balanced").strip().lower()
+    if key not in NEGOTIATION_PLAYBOOK_POLICIES:
+        key = "balanced"
+    return key, NEGOTIATION_PLAYBOOK_POLICIES[key]
+
+
+def _apply_playbook_target(target_otd: float, policy: dict[str, float | int | str]) -> float:
+    offset = float(policy.get("target_offset", 0.0))
+    return max(1000.0, round(float(target_otd) + offset, 2))
+
+
+def _apply_playbook_tone(message: str, tone: str) -> str:
+    if tone == "firm":
+        return message + " If this target cannot be met today, we will move to competing offers."
+    if tone == "collaborative":
+        return message + " We are flexible on structure if we can align quickly on a fair OTD."
+    return message
+
 
 def _format_money(value: float | None) -> str:
     if value is None:
@@ -857,15 +901,36 @@ def rank_offers(payload: OfferRankRequest) -> OfferRankResponse:
 @app.post("/negotiations/start", response_model=StartNegotiationResponse)
 def start_negotiation(payload: StartNegotiationRequest, db: Session = Depends(get_db)) -> StartNegotiationResponse:
     session = create_session(db, payload)
+
+    playbook_key, playbook_policy = _resolve_playbook(payload.playbook)
+    effective_target_otd = _apply_playbook_target(payload.target_otd, playbook_policy)
+
     strategy = run_negotiation_strategy(
         user_name=payload.user_name,
-        target_otd=payload.target_otd,
+        target_otd=effective_target_otd,
         dealer_otd=payload.dealer_otd,
         competitor_best_otd=payload.competitor_best_otd,
         offer_rank=payload.offer_rank,
         days_on_market=payload.days_on_market,
         price_drop_30d=payload.price_drop_30d,
     )
+
+    tone = str(playbook_policy.get("tone", "neutral"))
+    strategy["response_text"] = _apply_playbook_tone(strategy["response_text"], tone)
+
+    policy_snapshot = {
+        "playbook": playbook_key,
+        "target_offset": float(playbook_policy.get("target_offset", 0.0)),
+        "concession_step": float(playbook_policy.get("concession_step", 0.0)),
+        "max_rounds": int(playbook_policy.get("max_rounds", 0)),
+        "walk_away_buffer": float(playbook_policy.get("walk_away_buffer", 0.0)),
+        "tone": tone,
+        "input_target_otd": float(payload.target_otd),
+        "effective_target_otd": effective_target_otd,
+    }
+
+    session.playbook = playbook_key
+    session.playbook_policy = policy_snapshot
 
     message = add_message(
         db=db,
@@ -884,6 +949,7 @@ def start_negotiation(payload: StartNegotiationRequest, db: Session = Depends(ge
             "days_on_market": payload.days_on_market,
             "price_drop_7d": payload.price_drop_7d,
             "price_drop_30d": payload.price_drop_30d,
+            "playbook_policy": policy_snapshot,
         },
     )
     db.commit()
@@ -899,14 +965,19 @@ def start_negotiation(payload: StartNegotiationRequest, db: Session = Depends(ge
     publish_session_event(
         session_id=session.id,
         event_type="negotiation.session.started",
-        payload={"message_id": message.id, "action": strategy["action"], "delivery": delivery},
+        payload={"message_id": message.id, "action": strategy["action"], "delivery": delivery, "playbook": playbook_key},
     )
 
     decision = NegotiationDecision(
         action=strategy["action"],
         response_text=strategy["response_text"],
         anchor_otd=strategy["anchor_otd"],
-        rationale=strategy["rationale"],
+        rationale=(
+            f"{strategy['rationale']} "
+            f"Playbook={playbook_key}; max_rounds={policy_snapshot['max_rounds']}; "
+            f"concession_step=${policy_snapshot['concession_step']:,.0f}; "
+            f"walk_away_buffer=${policy_snapshot['walk_away_buffer']:,.0f}."
+        ),
     )
     return StartNegotiationResponse(session_id=session.id, status="active", decision=decision)
 
@@ -1147,6 +1218,8 @@ def to_session_out(session) -> NegotiationSessionOut:
         best_offer_otd=float(session.best_offer_otd) if session.best_offer_otd is not None else None,
         autopilot_enabled=bool(session.autopilot_enabled),
         autopilot_mode=session.autopilot_mode,
+        playbook=getattr(session, "playbook", "balanced") or "balanced",
+        playbook_policy=getattr(session, "playbook_policy", None),
         last_job_id=session.last_job_id,
         last_job_status=session.last_job_status,
         last_job_at=session.last_job_at.isoformat() if session.last_job_at else None,

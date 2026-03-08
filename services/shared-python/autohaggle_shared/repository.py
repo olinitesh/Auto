@@ -282,6 +282,7 @@ def create_session(db: Session, payload: StartNegotiationRequest) -> Negotiation
         dealership_id=payload.dealership_id,
         status="active",
         best_offer_otd=payload.dealer_otd,
+        playbook=(payload.playbook or "balanced"),
     )
     db.add(session)
     db.flush()

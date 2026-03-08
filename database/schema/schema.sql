@@ -36,6 +36,8 @@ CREATE TABLE IF NOT EXISTS negotiation_session (
   best_offer_otd NUMERIC(12,2),
   autopilot_enabled BOOLEAN NOT NULL DEFAULT FALSE,
   autopilot_mode VARCHAR(32) NOT NULL DEFAULT 'manual',
+  playbook VARCHAR(32) NOT NULL DEFAULT 'balanced',
+  playbook_policy JSONB,
   last_job_id VARCHAR(64),
   last_job_status VARCHAR(32),
   last_job_at TIMESTAMPTZ,

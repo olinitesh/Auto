@@ -1,3 +1,5 @@
+from typing import Literal
+
 from pydantic import BaseModel, Field
 
 
@@ -165,6 +167,7 @@ class StartNegotiationRequest(BaseModel):
     target_otd: float = Field(gt=0)
     dealer_otd: float = Field(gt=0)
     competitor_best_otd: float | None = None
+    playbook: Literal["aggressive", "balanced", "conservative"] | None = "balanced"
 
 
 class NegotiationDecision(BaseModel):
@@ -229,6 +232,8 @@ class NegotiationSessionOut(BaseModel):
     best_offer_otd: float | None
     autopilot_enabled: bool = False
     autopilot_mode: str = "manual"
+    playbook: str = "balanced"
+    playbook_policy: dict | None = None
     last_job_id: str | None = None
     last_job_status: str | None = None
     last_job_at: str | None = None
