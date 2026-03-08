@@ -248,6 +248,7 @@ type AssistantChatResponse = {
 type WorkspaceView = "offers" | "alerts" | "saved-searches" | "sessions" | "inventory" | "copilot";
 
 type UiTheme = "neon" | "sunset" | "graphite";
+type PlaybookKey = "aggressive" | "balanced" | "conservative";
 
 type PersistedSearchState = {
   userZip: string;
@@ -268,6 +269,7 @@ type PersistedSearchState = {
   expandedHistoryKeys: Record<string, boolean>;
   resultDealerFilter?: string;
   resultTrimFilter?: string;
+  negotiationPlaybookByOfferId?: Record<string, PlaybookKey>;
 };
 
 const apiBase = (import.meta.env.VITE_API_BASE_URL as string | undefined)?.replace(/\/$/, "") || "/api";
@@ -557,6 +559,7 @@ export function ComparisonPage() {
       setExpandedHistoryKeys(persisted.expandedHistoryKeys ?? {});
       setResultDealerFilter((persisted.resultDealerFilter ?? initialUrlParams.get("resultDealer") ?? "all") || "all");
       setResultTrimFilter((persisted.resultTrimFilter ?? initialUrlParams.get("resultTrim") ?? "all") || "all");
+      setNegotiationPlaybookByOfferId((persisted.negotiationPlaybookByOfferId ?? {}) as Record<string, PlaybookKey>);
     }
 
     setSearchStateHydrated(true);
@@ -649,6 +652,7 @@ export function ComparisonPage() {
   const [catalogMaxDom, setCatalogMaxDom] = useState(initialUrlParams.get("catalogMaxDom") ?? "");
   const [resultDealerFilter, setResultDealerFilter] = useState(() => initialUrlParams.get("resultDealer") ?? "all");
   const [resultTrimFilter, setResultTrimFilter] = useState(() => initialUrlParams.get("resultTrim") ?? "all");
+  const [negotiationPlaybookByOfferId, setNegotiationPlaybookByOfferId] = useState<Record<string, PlaybookKey>>({});
 
   const targetPreview = useMemo(() => {
     const t = trim.trim();
@@ -823,6 +827,7 @@ export function ComparisonPage() {
     catalogMaxDom,
     resultDealerFilter,
     resultTrimFilter,
+    negotiationPlaybookByOfferId,
   ]);
 
 
@@ -850,6 +855,7 @@ export function ComparisonPage() {
       expandedHistoryKeys,
       resultDealerFilter,
       resultTrimFilter,
+      negotiationPlaybookByOfferId,
     });
   }, [
     searchStateHydrated,
@@ -1329,6 +1335,14 @@ export function ComparisonPage() {
     setCatalogPage(1);
   }
 
+  function getOfferPlaybook(offerId: string): PlaybookKey {
+    return negotiationPlaybookByOfferId[offerId] ?? "balanced";
+  }
+
+  function setOfferPlaybook(offerId: string, playbook: PlaybookKey): void {
+    setNegotiationPlaybookByOfferId((prev) => ({ ...prev, [offerId]: playbook }));
+  }
+
   async function startNegotiation(item: RankedOffer) {
     const offer = item.offer;
     const competitorBest = rankedOffers
@@ -1346,6 +1360,7 @@ export function ComparisonPage() {
       target -= 150;
     }
     target = Math.max(1000, Math.round(target));
+    const playbook = getOfferPlaybook(offer.offer_id);
 
     setStartingNegotiationOfferId(offer.offer_id);
     setNegotiationStatus(null);
@@ -1371,6 +1386,7 @@ export function ComparisonPage() {
           target_otd: target,
           dealer_otd: offer.otd_price,
           competitor_best_otd: hasCompetitorBest ? competitorBest : null,
+          playbook,
         }),
       });
 
@@ -3224,6 +3240,17 @@ export function ComparisonPage() {
                           {copiedVin === item.offer.vin ? "Copied" : "Copy VIN"}
                         </button>
                       )}
+                      <label className="playbook-picker" title="Negotiation strategy preset for this offer.">
+                        Playbook
+                        <select
+                          value={getOfferPlaybook(item.offer.offer_id)}
+                          onChange={(e) => setOfferPlaybook(item.offer.offer_id, (e.target.value as PlaybookKey) || "balanced")}
+                        >
+                          <option value="aggressive">Aggressive</option>
+                          <option value="balanced">Balanced</option>
+                          <option value="conservative">Conservative</option>
+                        </select>
+                      </label>
                       <button
                         className="btn primary"
                         type="button"

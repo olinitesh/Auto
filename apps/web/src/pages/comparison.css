@@ -355,6 +355,20 @@ select:focus {
   gap: 8px;
 }
 
+.playbook-picker {
+  display: inline-flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 0.72rem;
+  color: var(--text-soft);
+  min-width: 165px;
+}
+
+.playbook-picker select {
+  min-width: 165px;
+  padding: 7px 8px;
+}
+
 .btn {
   border-radius: 11px;
   border: 1px solid rgba(124, 170, 214, 0.35);
