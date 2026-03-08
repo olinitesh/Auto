@@ -211,6 +211,12 @@ type NegotiationSession = {
   vehicle_label?: string;
   status: string;
   best_offer_otd?: number;
+  playbook?: PlaybookKey;
+  playbook_policy?: {
+    target_mode?: string;
+    target_adjustment?: number;
+    tone?: string;
+  };
   autopilot_enabled?: boolean;
   autopilot_mode?: string;
   last_job_id?: string;
@@ -445,6 +451,28 @@ function parseUiTheme(value: string | null): UiTheme {
 
 function parseCopilotResponseStyle(value: string | null): "concise" | "detailed" {
   return value === "detailed" ? "detailed" : "concise";
+}
+
+function parsePlaybook(value: string | null | undefined): PlaybookKey | null {
+  if (value === "aggressive" || value === "balanced" || value === "conservative") {
+    return value;
+  }
+  return null;
+}
+
+function getPlaybookLabel(playbook: string | null | undefined): string {
+  const normalized = parsePlaybook(playbook);
+  if (normalized === "aggressive") {
+    return "Aggressive";
+  }
+  if (normalized === "conservative") {
+    return "Conservative";
+  }
+  return "Balanced";
+}
+
+function getPlaybookStatusSuffix(playbook: string | null | undefined): string {
+  return ` (${getPlaybookLabel(playbook)} playbook)`;
 }
 
 function safeGetLocalStorageValue(key: string): string | null {
@@ -1343,6 +1371,14 @@ export function ComparisonPage() {
     setNegotiationPlaybookByOfferId((prev) => ({ ...prev, [offerId]: playbook }));
   }
 
+  function getSessionPlaybook(session: NegotiationSession): PlaybookKey {
+    const sessionPlaybook = parsePlaybook(session.playbook);
+    if (sessionPlaybook) {
+      return sessionPlaybook;
+    }
+    return session.offer_id ? getOfferPlaybook(session.offer_id) : "balanced";
+  }
+
   async function startNegotiation(item: RankedOffer) {
     const offer = item.offer;
     const competitorBest = rankedOffers
@@ -1395,7 +1431,7 @@ export function ComparisonPage() {
       }
 
       const data = await parseJsonResponse<StartNegotiationResponse>(response, "Start negotiation failed");
-      setNegotiationStatus(`Session started: ${data.session_id}`);
+      setNegotiationStatus(`Session started: ${data.session_id}${getPlaybookStatusSuffix(playbook)}`);
       await fetchNegotiations();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to start negotiation");
@@ -1404,7 +1440,7 @@ export function ComparisonPage() {
     }
   }
 
-  async function queueAutonomousRound(sessionId: string) {
+  async function queueAutonomousRound(sessionId: string, playbook?: string | null) {
     setQueueingSessionId(sessionId);
     setError(null);
 
@@ -1425,7 +1461,7 @@ export function ComparisonPage() {
         ...prev,
         [data.job_id]: { job_id: data.job_id, status: data.status, queue: data.queue, session_id: sessionId },
       }));
-      setNegotiationStatus(`Round queued: job ${data.job_id}`);
+      setNegotiationStatus(`Round queued: job ${data.job_id}${getPlaybookStatusSuffix(playbook)}`);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to queue round");
     } finally {
@@ -1448,7 +1484,12 @@ export function ComparisonPage() {
         throw new Error(await buildApiErrorMessage(response, "Autopilot update failed"));
       }
 
-      setNegotiationStatus(enabled ? "AI autopilot enabled." : "AI autopilot disabled.");
+      const playbook = getSessionPlaybook(session);
+      setNegotiationStatus(
+        enabled
+          ? `AI autopilot enabled${getPlaybookStatusSuffix(playbook)}.`
+          : `AI autopilot disabled${getPlaybookStatusSuffix(playbook)}.`,
+      );
       await fetchNegotiations();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to update autopilot");
@@ -1514,7 +1555,7 @@ export function ComparisonPage() {
     });
   }
 
-  async function simulateInboundReply(sessionId: string) {
+  async function simulateInboundReply(sessionId: string, playbook?: string | null) {
     const draft = getInboundDraft(sessionId);
     const body = draft.body.trim();
     if (!body) {
@@ -1542,11 +1583,11 @@ export function ComparisonPage() {
 
       const inboundResult = await parseJsonResponse<{ autopilot_triggered?: boolean; job_id?: string; skip_reason?: string }>(response, "Simulate reply failed");
       if (inboundResult.autopilot_triggered && inboundResult.job_id) {
-        setNegotiationStatus(`Inbound dealer reply recorded. AI round queued: ${inboundResult.job_id}`);
+        setNegotiationStatus(`Inbound dealer reply recorded${getPlaybookStatusSuffix(playbook)}. AI round queued: ${inboundResult.job_id}`);
       } else if (inboundResult.skip_reason === "job_in_progress") {
-        setNegotiationStatus("Inbound dealer reply recorded. Autopilot skipped because a job is already running.");
+        setNegotiationStatus(`Inbound dealer reply recorded${getPlaybookStatusSuffix(playbook)}. Autopilot skipped because a job is already running.`);
       } else {
-        setNegotiationStatus("Inbound dealer reply recorded.");
+        setNegotiationStatus(`Inbound dealer reply recorded${getPlaybookStatusSuffix(playbook)}.`);
       }
       updateInboundDraft(sessionId, { body: "" });
       await fetchNegotiations();
@@ -2607,12 +2648,16 @@ export function ComparisonPage() {
               {filteredNegotiations.slice(0, 12).map((session) => {
                 const sessionJobId = jobBySessionId[session.id];
                 const sessionJobStatus = sessionJobId ? jobStatusById[sessionJobId] : undefined;
+                const sessionPlaybook = getSessionPlaybook(session);
 
                 return (
                 <div className="offer-card" key={session.id}>
                   <div className="offer-head">
                     <strong>{session.dealership_name ?? session.dealership_id}</strong>
-                    <span className="pill">{session.status}</span>
+                    <div className="actions actions-tight actions-reset">
+                      <span className="pill pill-muted">{getPlaybookLabel(sessionPlaybook)} playbook</span>
+                      <span className="pill">{session.status}</span>
+                    </div>
                   </div>
                   <div className="stats">
                     <span>{session.vehicle_label ?? session.vehicle_id}</span>
@@ -2621,6 +2666,8 @@ export function ComparisonPage() {
                     {(sessionJobId || session.last_job_id) && <span>Job {(sessionJobId ?? session.last_job_id ?? "").slice(0, 8)}</span>}
                     {(sessionJobStatus?.status || session.last_job_status) && <span>Job Status {sessionJobStatus?.status ?? session.last_job_status}</span>}
                     {session.last_job_at && <span>Job At {formatSeenAt(session.last_job_at)}</span>}
+                    {session.playbook_policy?.target_mode && <span>Target {session.playbook_policy.target_mode}</span>}
+                    {session.playbook_policy?.tone && <span>Tone {session.playbook_policy.tone}</span>}
                     <span>Autopilot {session.autopilot_enabled ? `ON (${session.autopilot_mode ?? "autopilot"})` : "OFF"}</span>
                   </div>
                   <div className="form-grid form-offset">
@@ -2672,7 +2719,7 @@ export function ComparisonPage() {
                     <button
                       className="btn"
                       type="button"
-                      onClick={() => void simulateInboundReply(session.id)}
+                      onClick={() => void simulateInboundReply(session.id, sessionPlaybook)}
                       disabled={sendingInboundSessionId === session.id}
                     >
                       {sendingInboundSessionId === session.id ? "Recording..." : "Simulate Dealer Reply"}
@@ -2680,7 +2727,7 @@ export function ComparisonPage() {
                     <button
                       className="btn"
                       type="button"
-                      onClick={() => void queueAutonomousRound(session.id)}
+                      onClick={() => void queueAutonomousRound(session.id, sessionPlaybook)}
                       disabled={queueingSessionId === session.id}
                     >
                       {queueingSessionId === session.id ? "Queueing..." : "Queue Round"}
@@ -3264,7 +3311,7 @@ export function ComparisonPage() {
                           <button
                             className="btn"
                             type="button"
-                            onClick={() => void queueAutonomousRound(activeSession.id)}
+                            onClick={() => void queueAutonomousRound(activeSession.id, activeSession.playbook)}
                             disabled={queueingSessionId === activeSession.id}
                           >
                             {queueingSessionId === activeSession.id ? "Queueing..." : "Queue Round"}
