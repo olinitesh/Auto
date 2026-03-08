@@ -710,8 +710,17 @@ export function ComparisonPage() {
   ]);
 
   useEffect(() => {
+    const ENTER_THRESHOLD = 44;
+    const EXIT_THRESHOLD = 0;
+
     const onScroll = () => {
-      setHeaderStackScrolled(window.scrollY > 16);
+      const y = window.scrollY;
+      setHeaderStackScrolled((current) => {
+        if (current) {
+          return y > EXIT_THRESHOLD;
+        }
+        return y > ENTER_THRESHOLD;
+      });
     };
 
     onScroll();
@@ -819,6 +828,26 @@ export function ComparisonPage() {
     return detail ? `${fallbackLabel} (${response.status}): ${detail}` : `${fallbackLabel} (${response.status})`;
   }
 
+  async function parseJsonResponse<T>(response: Response, fallbackLabel: string): Promise<T> {
+    const contentType = (response.headers.get("content-type") ?? "").toLowerCase();
+    const bodyText = await response.text();
+
+    if (!bodyText.trim()) {
+      throw new Error(`${fallbackLabel}: empty response body`);
+    }
+
+    try {
+      return JSON.parse(bodyText) as T;
+    } catch {
+      const snippet = bodyText.slice(0, 80).replace(/\s+/g, " ").trim();
+      const looksLikeHtml = snippet.startsWith("<!doctype") || snippet.startsWith("<html") || contentType.includes("text/html");
+      if (looksLikeHtml) {
+        throw new Error(`${fallbackLabel}: API returned HTML instead of JSON. Check VITE_API_BASE_URL/proxy.`);
+      }
+      throw new Error(`${fallbackLabel}: invalid JSON response`);
+    }
+  }
+
   function buildTargets(): VehicleTarget[] {
     const normalized = normalizeModelAndTrim(model, trim);
     return [
@@ -863,7 +892,7 @@ export function ComparisonPage() {
       if (!response.ok) {
         throw new Error(await buildApiErrorMessage(response, "Load saved searches failed"));
       }
-      const data = (await response.json()) as SavedSearchListResponse;
+      const data = await parseJsonResponse<SavedSearchListResponse>(response, "Load saved searches failed");
       setSavedSearches(data.searches ?? []);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to load saved searches");
@@ -879,7 +908,7 @@ export function ComparisonPage() {
       if (!response.ok) {
         throw new Error(await buildApiErrorMessage(response, "Load negotiations failed"));
       }
-      const data = (await response.json()) as NegotiationSession[];
+      const data = await parseJsonResponse<NegotiationSession[]>(response, "Load negotiations failed");
       setNegotiations(Array.isArray(data) ? data : []);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to load negotiations");
@@ -911,7 +940,7 @@ export function ComparisonPage() {
         throw new Error(await buildApiErrorMessage(response, "Load inventory catalog failed"));
       }
 
-      const data = (await response.json()) as OfferCatalogResponse;
+      const data = await parseJsonResponse<OfferCatalogResponse>(response, "Load inventory catalog failed");
       setCatalogOffers(data.offers ?? []);
       setCatalogTotal(Number(data.total ?? 0));
       setCatalogTotalPages(Number(data.total_pages ?? 1));
@@ -995,7 +1024,7 @@ export function ComparisonPage() {
       }
 
       if (!response.body) {
-        const fallback = (await response.json()) as AssistantChatResponse;
+        const fallback = await parseJsonResponse<AssistantChatResponse>(response, "Copilot request failed");
         updateAssistantMessage({
           content: fallback.answer || "I could not generate a response for that question.",
           citedOfferIds: Array.isArray(fallback.cited_offer_ids) ? fallback.cited_offer_ids : [],
@@ -1151,7 +1180,7 @@ export function ComparisonPage() {
         throw new Error(await buildApiErrorMessage(response, "Start negotiation failed"));
       }
 
-      const data = (await response.json()) as StartNegotiationResponse;
+      const data = await parseJsonResponse<StartNegotiationResponse>(response, "Start negotiation failed");
       setNegotiationStatus(`Session started: ${data.session_id}`);
       await fetchNegotiations();
     } catch (err) {
@@ -1176,7 +1205,7 @@ export function ComparisonPage() {
         throw new Error(await buildApiErrorMessage(response, "Queue round failed"));
       }
 
-      const data = (await response.json()) as EnqueueRoundResponse;
+      const data = await parseJsonResponse<EnqueueRoundResponse>(response, "Queue round failed");
       setJobBySessionId((prev) => ({ ...prev, [sessionId]: data.job_id }));
       setJobStatusById((prev) => ({
         ...prev,
@@ -1219,7 +1248,7 @@ export function ComparisonPage() {
       if (!response.ok) {
         return;
       }
-      const data = (await response.json()) as JobStatusResponse;
+      const data = await parseJsonResponse<JobStatusResponse>(response, "Load job status failed");
       setJobStatusById((prev) => ({ ...prev, [jobId]: data }));
       if (["finished", "failed", "stopped", "canceled"].includes((data.status || "").toLowerCase())) {
         void fetchNegotiations();
@@ -1297,7 +1326,7 @@ export function ComparisonPage() {
         throw new Error(await buildApiErrorMessage(response, "Simulate reply failed"));
       }
 
-      const inboundResult = (await response.json()) as { autopilot_triggered?: boolean; job_id?: string; skip_reason?: string };
+      const inboundResult = await parseJsonResponse<{ autopilot_triggered?: boolean; job_id?: string; skip_reason?: string }>(response, "Simulate reply failed");
       if (inboundResult.autopilot_triggered && inboundResult.job_id) {
         setNegotiationStatus(`Inbound dealer reply recorded. AI round queued: ${inboundResult.job_id}`);
       } else if (inboundResult.skip_reason === "job_in_progress") {
@@ -1323,7 +1352,7 @@ export function ComparisonPage() {
       if (!response.ok) {
         throw new Error(await buildApiErrorMessage(response, "Load alerts failed"));
       }
-      const data = (await response.json()) as SavedSearchAlertListResponse;
+      const data = await parseJsonResponse<SavedSearchAlertListResponse>(response, "Load alerts failed");
       setAlerts(data.alerts ?? []);
       setAlertsTotal(Number(data.total ?? 0));
       setAlertsTotalPages(Number(data.total_pages ?? 1));
@@ -1340,7 +1369,7 @@ export function ComparisonPage() {
       if (!response.ok) {
         throw new Error(await buildApiErrorMessage(response, "Acknowledge alert failed"));
       }
-      const _data = (await response.json()) as SavedSearchAlertAckResponse;
+      const _data = await parseJsonResponse<SavedSearchAlertAckResponse>(response, "Acknowledge alert failed");
       await fetchAlerts();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to acknowledge alert");
@@ -1363,7 +1392,7 @@ export function ComparisonPage() {
       if (!response.ok) {
         throw new Error(await buildApiErrorMessage(response, "Bulk acknowledge failed"));
       }
-      const _data = (await response.json()) as SavedSearchAlertAckAllResponse;
+      const _data = await parseJsonResponse<SavedSearchAlertAckAllResponse>(response, "Bulk acknowledge failed");
       await fetchAlerts();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to acknowledge shown alerts");
@@ -1396,7 +1425,7 @@ export function ComparisonPage() {
         throw new Error(await buildApiErrorMessage(response, "Save search failed"));
       }
 
-      const saved = (await response.json()) as SavedSearch;
+      const saved = await parseJsonResponse<SavedSearch>(response, "Save search failed");
       setSelectedSavedSearchId(saved.id);
       setSavedSearchName("");
       await fetchSavedSearches();
@@ -1430,7 +1459,7 @@ export function ComparisonPage() {
       if (!response.ok) {
         throw new Error(await buildApiErrorMessage(response, "Delete search failed"));
       }
-      const _data = (await response.json()) as SavedSearchDeleteResponse;
+      const _data = await parseJsonResponse<SavedSearchDeleteResponse>(response, "Delete search failed");
       setSavedSearches((prev) => prev.filter((item) => item.id !== searchId));
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to delete saved search");
@@ -1471,7 +1500,7 @@ export function ComparisonPage() {
         throw new Error(`Fallback ingest failed (${response.status})`);
       }
 
-      const data = (await response.json()) as IngestFallbackResponse;
+      const data = await parseJsonResponse<IngestFallbackResponse>(response, "Fallback ingest failed");
       setIngestStatus(
         `Ingested via ${data.provider}: jobs=${data.jobs_collected}, normalized=${data.normalized_count}, inserted=${data.inserted}, updated=${data.updated}`,
       );
@@ -1493,7 +1522,7 @@ export function ComparisonPage() {
       throw new Error(await buildApiErrorMessage(response, "Rank failed"));
     }
 
-    const data = (await response.json()) as OfferRankResponse;
+    const data = await parseJsonResponse<OfferRankResponse>(response, "Rank failed");
     return data.ranked_offers ?? [];
   }
 
@@ -1517,7 +1546,7 @@ export function ComparisonPage() {
       return offersToEnrich;
     }
 
-    const data = (await response.json()) as OfferTrendsBulkResponse;
+    const data = await parseJsonResponse<OfferTrendsBulkResponse>(response, "Trend fetch failed");
     const trendByKey = new Map(
       (data.trends ?? []).map((item) => [`${item.dealership_id}::${item.vehicle_id}`, item]),
     );
@@ -1554,7 +1583,7 @@ export function ComparisonPage() {
         throw new Error(`History failed (${response.status})`);
       }
 
-      const data = (await response.json()) as OfferHistoryResponse;
+      const data = await parseJsonResponse<OfferHistoryResponse>(response, "History fetch failed");
       setHistoryByKey((prev) => ({ ...prev, [key]: data }));
     } catch (err) {
       setHistoryErrorByKey((prev) => ({
@@ -1611,7 +1640,7 @@ export function ComparisonPage() {
         throw new Error(await buildApiErrorMessage(response, "Search failed"));
       }
 
-      const data = (await response.json()) as OfferSearchResponse;
+      const data = await parseJsonResponse<OfferSearchResponse>(response, "Search failed");
       const nextOffers = data.offers ?? [];
 
       if (nextOffers.length === 0) {
@@ -1833,34 +1862,9 @@ export function ComparisonPage() {
     return `/?${target.toString()}`;
   }
 
-  return (
-    <main className="comparison-page">
-      <div className={`sticky-top-stack ${headerStackScrolled ? "scrolled" : ""}`.trim()}>
-      <section className="hero">
-        <p className="kicker">AutoHaggle</p>
-        <h1>Auto Deal Dashboard</h1>
-        <p className="subtitle">
-          Search live listings, include incoming/hidden inventory if needed, and rank by price, specs, and fees.
-        </p>
-        <div className="hero-meta">
-          <span className="pill">Active Alerts: {alerts.length}</span>
-          <span className="pill">Saved Searches: {savedSearches.length}</span>
-          <span className="pill">Negotiations: {negotiations.length}</span>
-          <span className="pill">Active Search: {selectedSavedSearchId ?? "ad-hoc"}</span>
-        </div>
-        <div className="hero-toolbar">
-          <label>
-            Theme
-            <select className="theme-select" value={uiTheme} onChange={(e) => setUiTheme(parseUiTheme(e.target.value))}>
-              <option value="neon">Neon Grid</option>
-              <option value="sunset">Sunset Glass</option>
-              <option value="graphite">Graphite Pro</option>
-            </select>
-          </label>
-        </div>
-      </section>
-
-      <nav className="workspace-nav" aria-label="Workspace sections">
+  function renderWorkspaceNav(extraClassName: string): JSX.Element {
+    return (
+      <nav className={`workspace-nav ${extraClassName}`.trim()} aria-label="Workspace sections">
         <button
           className={`workspace-tab ${isOffersView ? "active" : ""}`.trim()}
           type="button"
@@ -1909,6 +1913,42 @@ export function ComparisonPage() {
           <span>{chatMessages.length}</span>
         </button>
       </nav>
+    );
+  }
+
+  return (
+    <main className="comparison-page">
+      <div className={`sticky-top-stack ${headerStackScrolled ? "scrolled" : ""}`.trim()}>
+      <section className="hero">
+        <div className="hero-topline">
+          <div>
+            <p className="kicker">AutoHaggle</p>
+            <h1>Auto Deal Dashboard</h1>
+            <p className="subtitle">
+              Search live listings, include incoming/hidden inventory if needed, and rank by price, specs, and fees.
+            </p>
+          </div>
+          <div className="hero-toolbar">
+            <label>
+              Theme
+              <select className="theme-select" value={uiTheme} onChange={(e) => setUiTheme(parseUiTheme(e.target.value))}>
+                <option value="neon">Neon Grid</option>
+                <option value="sunset">Sunset Glass</option>
+                <option value="graphite">Graphite Pro</option>
+              </select>
+            </label>
+          </div>
+        </div>
+        <div className="hero-meta">
+          <span className="pill">Alerts {alerts.length}</span>
+          <span className="pill">Searches {savedSearches.length}</span>
+          <span className="pill">Negotiations {negotiations.length}</span>
+          <span className="pill">Search {selectedSavedSearchId ?? "ad-hoc"}</span>
+        </div>
+        {renderWorkspaceNav("hero-workspace-nav")}
+      </section>
+
+      {renderWorkspaceNav("secondary-workspace-nav")}
       </div>
 
       <section className="panel">
@@ -2847,6 +2887,9 @@ export function ComparisonPage() {
                 const dealerHref = normalizeExternalUrl(item.offer.dealer_url);
                 const activeSession = sessionByOfferId.get(item.offer.offer_id);
                 const signals = buildOfferSignals(item.offer);
+                const inventoryStatus = (item.offer.inventory_status ?? "").trim();
+                const normalizedInventoryStatus = inventoryStatus.toLowerCase();
+                const isAvailable = normalizedInventoryStatus.includes("available") && !item.offer.is_pre_sold;
 
                 return (
                   <div className={`rank-card${item.rank === 1 ? " best" : ""}`} key={`${item.offer.offer_id}-${item.rank}`}>
@@ -2870,6 +2913,11 @@ export function ComparisonPage() {
                       {item.offer.dealer_discount !== undefined && item.offer.dealer_discount > 0 && <span title="Dealer discount derived from MSRP minus advertised price.">Discount ${item.offer.dealer_discount.toLocaleString()}</span>}
                       {item.offer.listed_price !== undefined && <span title="Primary listed price used for OTD computation.">List ${item.offer.listed_price.toLocaleString()}</span>}
                       {item.offer.vin && <span title="Vehicle identification number from source listing.">VIN {item.offer.vin}</span>}
+                      {isAvailable && <span className="tag tag-available" title="Listing is currently marked available.">Available</span>}
+                      {item.offer.is_in_transit && <span className="tag tag-transit" title="Vehicle is in transit.">In-Transit</span>}
+                      {item.offer.is_pre_sold && <span className="tag tag-presold" title="Vehicle is marked pre-sold.">Pre-Sold</span>}
+                      {item.offer.is_hidden && <span className="tag tag-hidden" title="Listing is hidden inventory.">Hidden</span>}
+                      {inventoryStatus && !isAvailable && <span className="tag tag-status" title="Inventory status from source data.">Status {inventoryStatus}</span>}
                       <span title="Price sub-score used by ranking. Higher typically means more favorable price positioning.">
                         Price {item.score_breakdown.price_score ?? 0}
                       </span>
