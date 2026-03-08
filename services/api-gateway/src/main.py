@@ -54,6 +54,7 @@ from autohaggle_shared.schemas import (
     NegotiationMessageOut,
     NegotiationSessionOut,
     NegotiationSessionUpdateRequest,
+    NegotiationStatusUpdateRequest,
     OfferCatalogResponse,
     OfferHistoryResponse,
     OfferRankRequest,
@@ -130,6 +131,31 @@ def _dom_bucket(days: int | None) -> str | None:
 
 OPENAI_BASE_URL = os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1")
 OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4.1-mini")
+
+ALLOWED_STATUS_TRANSITIONS: dict[str, set[str]] = {
+    "new": {"active", "closed", "failed"},
+    "active": {"queued", "running", "responded", "closed", "failed"},
+    "queued": {"running", "responded", "closed", "failed"},
+    "running": {"responded", "closed", "failed"},
+    "responded": {"queued", "running", "closed", "failed"},
+    "closed": {"active"},
+    "failed": {"active", "closed"},
+}
+
+def _normalize_status(value: str | None) -> str:
+    return (value or "").strip().lower()
+
+def _can_transition_status(current_status: str | None, next_status: str | None) -> bool:
+    current = _normalize_status(current_status)
+    nxt = _normalize_status(next_status)
+    if not current or not nxt:
+        return False
+    if current == nxt:
+        return True
+    return nxt in ALLOWED_STATUS_TRANSITIONS.get(current, set())
+
+def _is_job_active(status: str | None) -> bool:
+    return _normalize_status(status) in {"queued", "started", "scheduled", "deferred", "running"}
 
 def _format_money(value: float | None) -> str:
     if value is None:
@@ -948,6 +974,45 @@ def get_negotiation(session_id: str, db: Session = Depends(get_db)) -> Negotiati
     return to_session_out(session)
 
 
+@app.patch("/negotiations/{session_id}/status", response_model=NegotiationSessionOut)
+def update_negotiation_status(
+    session_id: str,
+    payload: NegotiationStatusUpdateRequest,
+    db: Session = Depends(get_db),
+) -> NegotiationSessionOut:
+    session = get_session_with_messages(db, session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Negotiation session not found")
+
+    previous_status = _normalize_status(session.status)
+    next_status = _normalize_status(payload.status)
+    if not _can_transition_status(previous_status, next_status):
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid status transition: {previous_status or 'unknown'} -> {next_status or 'unknown'}",
+        )
+
+    ok = update_session_status(db, session_id=session_id, status=next_status)
+    if not ok:
+        raise HTTPException(status_code=404, detail="Negotiation session not found")
+
+    updated = get_session_with_messages(db, session_id)
+    if not updated:
+        raise HTTPException(status_code=404, detail="Negotiation session not found")
+
+    publish_session_event(
+        session_id=session_id,
+        event_type="negotiation.status.updated",
+        payload={
+            "previous_status": previous_status,
+            "status": next_status,
+            "source": (payload.source or "api").strip() or "api",
+            "actor": (payload.actor or "operator").strip() or "operator",
+        },
+    )
+
+    return to_session_out(updated)
+
 @app.patch("/negotiations/{session_id}", response_model=NegotiationSessionOut)
 def update_negotiation_session(
     session_id: str,
@@ -1043,6 +1108,12 @@ def enqueue_autonomous_round(
     session = get_session_with_messages(db, session_id)
     if not session:
         raise HTTPException(status_code=404, detail="Negotiation session not found")
+
+    session_state = _normalize_status(session.status)
+    if session_state in {"closed", "failed"}:
+        raise HTTPException(status_code=409, detail="Cannot queue round for closed/failed sessions")
+    if _is_job_active(session.last_job_status):
+        raise HTTPException(status_code=409, detail="A round is already queued or running for this session")
 
     queue = get_queue()
     job = queue.enqueue(run_autonomous_round, session_id, payload.user_name)
@@ -1239,6 +1310,9 @@ def to_session_out(session) -> NegotiationSessionOut:
             for message in session.messages
         ],
     )
+
+
+
 
 
 

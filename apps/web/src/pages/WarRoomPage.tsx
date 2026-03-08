@@ -33,6 +33,8 @@ type NegotiationSessionDetail = {
   playbook?: string;
   playbook_policy?: PlaybookPolicy | null;
   best_offer_otd?: number;
+  autopilot_enabled?: boolean;
+  autopilot_mode?: string;
   messages: NegotiationMessage[];
 };
 
@@ -70,6 +72,9 @@ function eventTitle(event: WarRoomEvent): string {
   if (eventType === "negotiation.round.queued") {
     return "Round Queued";
   }
+  if (eventType === "negotiation.status.updated") {
+    return "Status Updated";
+  }
   if (eventType === "negotiation.message.sent") {
     return "Outbound AI Message";
   }
@@ -96,6 +101,9 @@ export function WarRoomPage({ sessionId, returnTo }: WarRoomPageProps) {
   const [queueingRound, setQueueingRound] = useState(false);
   const [queueStatus, setQueueStatus] = useState<string | null>(null);
   const [queueError, setQueueError] = useState<string | null>(null);
+  const [actionLoading, setActionLoading] = useState<string | null>(null);
+  const [actionStatus, setActionStatus] = useState<string | null>(null);
+  const [actionError, setActionError] = useState<string | null>(null);
   const socketRef = useRef<WebSocket | null>(null);
 
   const wsUrl = useMemo(() => {
@@ -215,6 +223,54 @@ export function WarRoomPage({ sessionId, returnTo }: WarRoomPageProps) {
     }
   }
 
+  async function updateSessionStatusAction(nextStatus: "active" | "closed"): Promise<void> {
+    setActionLoading(nextStatus);
+    setActionError(null);
+    setActionStatus(null);
+
+    try {
+      const response = await fetch(`${apiBase}/negotiations/${sessionId}/status`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ status: nextStatus, source: "warroom", actor: "operator" }),
+      });
+      if (!response.ok) {
+        const detail = await response.text();
+        throw new Error(detail || `Status update failed (${response.status})`);
+      }
+      setActionStatus(`Session status updated: ${nextStatus}`);
+      await loadHistory();
+    } catch (err) {
+      setActionError(err instanceof Error ? err.message : "Failed to update status");
+    } finally {
+      setActionLoading(null);
+    }
+  }
+
+  async function pauseAutopilot(): Promise<void> {
+    setActionLoading("autopilot");
+    setActionError(null);
+    setActionStatus(null);
+
+    try {
+      const response = await fetch(`${apiBase}/negotiations/${sessionId}/autopilot`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ enabled: false, mode: "manual" }),
+      });
+      if (!response.ok) {
+        const detail = await response.text();
+        throw new Error(detail || `Autopilot update failed (${response.status})`);
+      }
+      setActionStatus("Autopilot paused.");
+      await loadHistory();
+    } catch (err) {
+      setActionError(err instanceof Error ? err.message : "Failed to pause autopilot");
+    } finally {
+      setActionLoading(null);
+    }
+  }
+
   function connect() {
     if (socketRef.current && socketRef.current.readyState === WebSocket.OPEN) {
       return;
@@ -280,9 +336,35 @@ export function WarRoomPage({ sessionId, returnTo }: WarRoomPageProps) {
           <button className="btn" type="button" onClick={() => void queueRound()} disabled={queueingRound}>
             {queueingRound ? "Queueing..." : "Queue Round"}
           </button>
+          <button
+            className="btn"
+            type="button"
+            onClick={() => void updateSessionStatusAction("closed")}
+            disabled={actionLoading === "closed" || sessionStatus === "closed"}
+          >
+            {actionLoading === "closed" ? "Closing..." : "Close Session"}
+          </button>
+          <button
+            className="btn"
+            type="button"
+            onClick={() => void updateSessionStatusAction("active")}
+            disabled={actionLoading === "active" || sessionStatus !== "closed"}
+          >
+            {actionLoading === "active" ? "Reopening..." : "Reopen Session"}
+          </button>
+          <button
+            className="btn"
+            type="button"
+            onClick={() => void pauseAutopilot()}
+            disabled={actionLoading === "autopilot" || !sessionDetail?.autopilot_enabled}
+          >
+            {actionLoading === "autopilot" ? "Pausing..." : "Pause Autopilot"}
+          </button>
         </div>
         {queueStatus && <p className="success">{queueStatus}</p>}
         {queueError && <p className="error">{queueError}</p>}
+        {actionStatus && <p className="success">{actionStatus}</p>}
+        {actionError && <p className="error">{actionError}</p>}
       </section>
 
       {historyError && <p className="error">{historyError}</p>}
@@ -313,6 +395,14 @@ export function WarRoomPage({ sessionId, returnTo }: WarRoomPageProps) {
                       {nextPolicy?.effective_target_otd !== undefined && nextPolicy?.effective_target_otd !== null && (
                         <span className="pill">New Target ${Number(nextPolicy.effective_target_otd).toLocaleString()}</span>
                       )}
+                    </div>
+                  )}
+                  {event.event_type === "negotiation.status.updated" && (
+                    <div className="warroom-event-inline">
+                      <span className="pill">From {(payload.previous_status as string) || "n/a"}</span>
+                      <span className="pill">To {(payload.status as string) || "n/a"}</span>
+                      <span className="pill">Source {(payload.source as string) || "api"}</span>
+                      <span className="pill">Actor {(payload.actor as string) || "operator"}</span>
                     </div>
                   )}
                   {(event.event_type === "negotiation.message.sent" || event.event_type === "history.outbound") && (

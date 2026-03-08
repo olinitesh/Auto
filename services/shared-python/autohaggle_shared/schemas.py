@@ -202,6 +202,11 @@ class AutopilotUpdateRequest(BaseModel):
 class NegotiationSessionUpdateRequest(BaseModel):
     playbook: Literal["aggressive", "balanced", "conservative"]
 
+class NegotiationStatusUpdateRequest(BaseModel):
+    status: Literal["new", "active", "queued", "running", "responded", "closed", "failed"]
+    source: str | None = Field(default="api", min_length=2, max_length=32)
+    actor: str | None = Field(default="operator", min_length=2, max_length=64)
+
 class JobStatusResponse(BaseModel):
     job_id: str
     status: str
@@ -347,6 +352,8 @@ class AssistantChatResponse(BaseModel):
     cited_offer_ids: list[str] = Field(default_factory=list)
     checked_urls: list[str] = Field(default_factory=list)
     model: str | None = None
+
+
 
 
 
