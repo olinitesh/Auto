@@ -199,6 +199,9 @@ class AutopilotUpdateRequest(BaseModel):
     enabled: bool
     mode: str | None = Field(default=None, min_length=3, max_length=32)
 
+class NegotiationSessionUpdateRequest(BaseModel):
+    playbook: Literal["aggressive", "balanced", "conservative"]
+
 class JobStatusResponse(BaseModel):
     job_id: str
     status: str
@@ -342,6 +345,7 @@ class AssistantChatResponse(BaseModel):
     cited_offer_ids: list[str] = Field(default_factory=list)
     checked_urls: list[str] = Field(default_factory=list)
     model: str | None = None
+
 
 
 

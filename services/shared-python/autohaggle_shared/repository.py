@@ -372,6 +372,25 @@ def update_session_autopilot(
     db.commit()
     return True
 
+
+def update_session_playbook(
+    db: Session,
+    *,
+    session_id: str,
+    playbook: str,
+    playbook_policy: dict | None = None,
+) -> bool:
+    session = db.get(NegotiationSession, session_id)
+    if session is None:
+        return False
+
+    session.playbook = (playbook or "balanced").strip().lower() or "balanced"
+    session.playbook_policy = playbook_policy
+    session.last_job_at = datetime.utcnow()
+    db.commit()
+    return True
+
+
 def update_session_job_metadata(
     db: Session,
     *,
@@ -736,6 +755,7 @@ def list_offer_catalog(
     )
 
     return offers, total, filters
+
 
 
 

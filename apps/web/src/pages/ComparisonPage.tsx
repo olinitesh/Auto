@@ -213,9 +213,14 @@ type NegotiationSession = {
   best_offer_otd?: number;
   playbook?: PlaybookKey;
   playbook_policy?: {
-    target_mode?: string;
-    target_adjustment?: number;
+    playbook?: string;
+    target_offset?: number;
+    concession_step?: number;
+    max_rounds?: number;
+    walk_away_buffer?: number;
     tone?: string;
+    input_target_otd?: number | null;
+    effective_target_otd?: number | null;
   };
   autopilot_enabled?: boolean;
   autopilot_mode?: string;
@@ -636,6 +641,7 @@ export function ComparisonPage() {
   const [startingNegotiationOfferId, setStartingNegotiationOfferId] = useState<string | null>(null);
   const [queueingSessionId, setQueueingSessionId] = useState<string | null>(null);
   const [settingAutopilotSessionId, setSettingAutopilotSessionId] = useState<string | null>(null);
+  const [settingPlaybookSessionId, setSettingPlaybookSessionId] = useState<string | null>(null);
   const [jobBySessionId, setJobBySessionId] = useState<Record<string, string>>({});
   const [jobStatusById, setJobStatusById] = useState<Record<string, JobStatusResponse>>({});
   const [inboundDraftBySessionId, setInboundDraftBySessionId] = useState<Record<string, InboundDraft>>({});
@@ -1466,6 +1472,34 @@ export function ComparisonPage() {
       setError(err instanceof Error ? err.message : "Failed to queue round");
     } finally {
       setQueueingSessionId(null);
+    }
+  }
+
+  async function updateSessionPlaybook(session: NegotiationSession, playbook: PlaybookKey) {
+    setSettingPlaybookSessionId(session.id);
+    setError(null);
+
+    try {
+      const response = await fetch(`${apiBase}/negotiations/${session.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ playbook }),
+      });
+
+      if (!response.ok) {
+        throw new Error(await buildApiErrorMessage(response, "Playbook update failed"));
+      }
+
+      if (session.offer_id) {
+        setOfferPlaybook(session.offer_id, playbook);
+      }
+
+      setNegotiationStatus(`Session playbook updated${getPlaybookStatusSuffix(playbook)}.`);
+      await fetchNegotiations();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to update session playbook");
+    } finally {
+      setSettingPlaybookSessionId(null);
     }
   }
 
@@ -2666,8 +2700,10 @@ export function ComparisonPage() {
                     {(sessionJobId || session.last_job_id) && <span>Job {(sessionJobId ?? session.last_job_id ?? "").slice(0, 8)}</span>}
                     {(sessionJobStatus?.status || session.last_job_status) && <span>Job Status {sessionJobStatus?.status ?? session.last_job_status}</span>}
                     {session.last_job_at && <span>Job At {formatSeenAt(session.last_job_at)}</span>}
-                    {session.playbook_policy?.target_mode && <span>Target {session.playbook_policy.target_mode}</span>}
+                    {session.playbook_policy?.effective_target_otd !== undefined && session.playbook_policy?.effective_target_otd !== null && <span>Target ${Number(session.playbook_policy.effective_target_otd).toLocaleString()}</span>}
                     {session.playbook_policy?.tone && <span>Tone {session.playbook_policy.tone}</span>}
+                    {session.playbook_policy?.max_rounds !== undefined && <span>Max Rounds {session.playbook_policy.max_rounds}</span>}
+                    {session.playbook_policy?.concession_step !== undefined && <span>Concession ${Number(session.playbook_policy.concession_step).toLocaleString()}</span>}
                     <span>Autopilot {session.autopilot_enabled ? `ON (${session.autopilot_mode ?? "autopilot"})` : "OFF"}</span>
                   </div>
                   <div className="form-grid form-offset">
@@ -2704,6 +2740,18 @@ export function ComparisonPage() {
                     </label>
                   </div>
                   <div className="link-actions">
+                    <label className="playbook-picker" title="Session-level negotiation strategy. Updates future rounds for this session.">
+                      Playbook
+                      <select
+                        value={sessionPlaybook}
+                        onChange={(e) => void updateSessionPlaybook(session, (e.target.value as PlaybookKey) || "balanced")}
+                        disabled={settingPlaybookSessionId === session.id}
+                      >
+                        <option value="aggressive">Aggressive</option>
+                        <option value="balanced">Balanced</option>
+                        <option value="conservative">Conservative</option>
+                      </select>
+                    </label>
                     <button
                       className="btn"
                       type="button"
@@ -3460,3 +3508,7 @@ export function ComparisonPage() {
     </main>
   );
 }
+
+
+
+

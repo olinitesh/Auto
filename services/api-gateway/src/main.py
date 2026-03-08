@@ -18,6 +18,7 @@ from autohaggle_shared.database import SessionLocal, get_db, init_db
 from autohaggle_shared.events import publish_session_event
 from autohaggle_shared.jobs import run_autonomous_round
 from autohaggle_shared.negotiation import run_negotiation_strategy
+from autohaggle_shared.playbook import apply_playbook_target, apply_playbook_tone, build_playbook_policy_snapshot, resolve_playbook
 from autohaggle_shared.queueing import get_queue
 from autohaggle_shared.repository import (
     add_message,
@@ -35,6 +36,7 @@ from autohaggle_shared.repository import (
     list_sessions,
     update_session_autopilot,
     update_session_job_metadata,
+    update_session_playbook,
     update_session_status,
     upsert_offer_observations,
 )
@@ -51,6 +53,7 @@ from autohaggle_shared.schemas import (
     NegotiationDecision,
     NegotiationMessageOut,
     NegotiationSessionOut,
+    NegotiationSessionUpdateRequest,
     OfferCatalogResponse,
     OfferHistoryResponse,
     OfferRankRequest,
@@ -127,51 +130,6 @@ def _dom_bucket(days: int | None) -> str | None:
 
 OPENAI_BASE_URL = os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1")
 OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4.1-mini")
-
-NEGOTIATION_PLAYBOOK_POLICIES: dict[str, dict[str, float | int | str]] = {
-    "aggressive": {
-        "target_offset": -450.0,
-        "concession_step": 150.0,
-        "max_rounds": 6,
-        "walk_away_buffer": 300.0,
-        "tone": "firm",
-    },
-    "balanced": {
-        "target_offset": -250.0,
-        "concession_step": 250.0,
-        "max_rounds": 5,
-        "walk_away_buffer": 200.0,
-        "tone": "neutral",
-    },
-    "conservative": {
-        "target_offset": -100.0,
-        "concession_step": 350.0,
-        "max_rounds": 4,
-        "walk_away_buffer": 120.0,
-        "tone": "collaborative",
-    },
-}
-
-
-def _resolve_playbook(playbook: str | None) -> tuple[str, dict[str, float | int | str]]:
-    key = (playbook or "balanced").strip().lower()
-    if key not in NEGOTIATION_PLAYBOOK_POLICIES:
-        key = "balanced"
-    return key, NEGOTIATION_PLAYBOOK_POLICIES[key]
-
-
-def _apply_playbook_target(target_otd: float, policy: dict[str, float | int | str]) -> float:
-    offset = float(policy.get("target_offset", 0.0))
-    return max(1000.0, round(float(target_otd) + offset, 2))
-
-
-def _apply_playbook_tone(message: str, tone: str) -> str:
-    if tone == "firm":
-        return message + " If this target cannot be met today, we will move to competing offers."
-    if tone == "collaborative":
-        return message + " We are flexible on structure if we can align quickly on a fair OTD."
-    return message
-
 
 def _format_money(value: float | None) -> str:
     if value is None:
@@ -902,8 +860,8 @@ def rank_offers(payload: OfferRankRequest) -> OfferRankResponse:
 def start_negotiation(payload: StartNegotiationRequest, db: Session = Depends(get_db)) -> StartNegotiationResponse:
     session = create_session(db, payload)
 
-    playbook_key, playbook_policy = _resolve_playbook(payload.playbook)
-    effective_target_otd = _apply_playbook_target(payload.target_otd, playbook_policy)
+    playbook_key, playbook_policy = resolve_playbook(payload.playbook)
+    effective_target_otd = apply_playbook_target(payload.target_otd, playbook_policy)
 
     strategy = run_negotiation_strategy(
         user_name=payload.user_name,
@@ -916,18 +874,12 @@ def start_negotiation(payload: StartNegotiationRequest, db: Session = Depends(ge
     )
 
     tone = str(playbook_policy.get("tone", "neutral"))
-    strategy["response_text"] = _apply_playbook_tone(strategy["response_text"], tone)
-
-    policy_snapshot = {
-        "playbook": playbook_key,
-        "target_offset": float(playbook_policy.get("target_offset", 0.0)),
-        "concession_step": float(playbook_policy.get("concession_step", 0.0)),
-        "max_rounds": int(playbook_policy.get("max_rounds", 0)),
-        "walk_away_buffer": float(playbook_policy.get("walk_away_buffer", 0.0)),
-        "tone": tone,
-        "input_target_otd": float(payload.target_otd),
-        "effective_target_otd": effective_target_otd,
-    }
+    strategy["response_text"] = apply_playbook_tone(strategy["response_text"], tone)
+    policy_snapshot = build_playbook_policy_snapshot(
+        playbook_key=playbook_key,
+        policy=playbook_policy,
+        input_target_otd=float(payload.target_otd),
+    )
 
     session.playbook = playbook_key
     session.playbook_policy = policy_snapshot
@@ -995,6 +947,48 @@ def get_negotiation(session_id: str, db: Session = Depends(get_db)) -> Negotiati
         raise HTTPException(status_code=404, detail="Negotiation session not found")
     return to_session_out(session)
 
+
+@app.patch("/negotiations/{session_id}", response_model=NegotiationSessionOut)
+def update_negotiation_session(
+    session_id: str,
+    payload: NegotiationSessionUpdateRequest,
+    db: Session = Depends(get_db),
+) -> NegotiationSessionOut:
+    session = get_session_with_messages(db, session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Negotiation session not found")
+
+    playbook_key, playbook_policy = resolve_playbook(payload.playbook)
+    input_target = float(session.best_offer_otd) if session.best_offer_otd is not None else None
+    policy_snapshot = build_playbook_policy_snapshot(
+        playbook_key=playbook_key,
+        policy=playbook_policy,
+        input_target_otd=input_target,
+    )
+
+    ok = update_session_playbook(
+        db,
+        session_id=session_id,
+        playbook=playbook_key,
+        playbook_policy=policy_snapshot,
+    )
+    if not ok:
+        raise HTTPException(status_code=404, detail="Negotiation session not found")
+
+    updated = get_session_with_messages(db, session_id)
+    if not updated:
+        raise HTTPException(status_code=404, detail="Negotiation session not found")
+
+    publish_session_event(
+        session_id=session_id,
+        event_type="negotiation.playbook.updated",
+        payload={
+            "playbook": playbook_key,
+            "playbook_policy": policy_snapshot,
+        },
+    )
+
+    return to_session_out(updated)
 
 @app.patch("/negotiations/{session_id}/autopilot", response_model=NegotiationSessionOut)
 def update_negotiation_autopilot(
@@ -1237,6 +1231,13 @@ def to_session_out(session) -> NegotiationSessionOut:
             for message in session.messages
         ],
     )
+
+
+
+
+
+
+
 
 
 

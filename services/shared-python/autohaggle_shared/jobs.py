@@ -4,6 +4,7 @@ from autohaggle_shared.communication_client import send_negotiation_email, send_
 from autohaggle_shared.database import SessionLocal
 from autohaggle_shared.events import publish_session_event
 from autohaggle_shared.negotiation import run_negotiation_strategy
+from autohaggle_shared.playbook import apply_playbook_target, apply_playbook_tone, build_playbook_policy_snapshot, resolve_playbook
 from autohaggle_shared.repository import add_message, get_session_with_messages, update_session_status
 
 
@@ -16,15 +17,30 @@ def run_autonomous_round(session_id: str, user_name: str) -> dict:
             return {"ok": False, "error": "session_not_found", "session_id": session_id}
 
         current_offer = float(session.best_offer_otd or 0)
-        target_otd = current_offer - 750 if current_offer > 0 else 30000
-        competitor_otd = current_offer - 350 if current_offer > 0 else None
+        fallback_target = current_offer if current_offer > 0 else 30000.0
+
+        playbook_key, playbook_policy = resolve_playbook(getattr(session, "playbook", None))
+        policy_snapshot = build_playbook_policy_snapshot(
+            playbook_key=playbook_key,
+            policy=playbook_policy,
+            input_target_otd=fallback_target,
+        )
+
+        stored_policy = session.playbook_policy if isinstance(session.playbook_policy, dict) else {}
+        concession_step = float(stored_policy.get("concession_step") or policy_snapshot.get("concession_step") or 250.0)
+        tone = str(stored_policy.get("tone") or policy_snapshot.get("tone") or "neutral")
+
+        target_otd = apply_playbook_target(fallback_target, playbook_policy)
+        dealer_otd = current_offer if current_offer > 0 else target_otd + max(concession_step * 1.5, 300.0)
+        competitor_otd = max(1000.0, dealer_otd - max(concession_step, 100.0))
 
         decision = run_negotiation_strategy(
             user_name=user_name,
             target_otd=target_otd,
-            dealer_otd=current_offer or target_otd + 900,
+            dealer_otd=dealer_otd,
             competitor_best_otd=competitor_otd,
         )
+        decision["response_text"] = apply_playbook_tone(decision["response_text"], tone)
 
         msg = add_message(
             db=db,
@@ -38,6 +54,8 @@ def run_autonomous_round(session_id: str, user_name: str) -> dict:
                 "anchor_otd": decision["anchor_otd"],
                 "rationale": decision["rationale"],
                 "mode": "autonomous_round",
+                "playbook": playbook_key,
+                "playbook_policy": stored_policy or policy_snapshot,
             },
         )
         db.commit()
@@ -63,6 +81,7 @@ def run_autonomous_round(session_id: str, user_name: str) -> dict:
                 "body": msg.body,
                 "delivery": delivery,
                 "session_status": next_status,
+                "playbook": playbook_key,
             },
         )
 
