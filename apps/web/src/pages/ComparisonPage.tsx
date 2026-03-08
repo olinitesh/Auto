@@ -3058,4 +3058,3 @@ export function ComparisonPage() {
     </main>
   );
 }
-
