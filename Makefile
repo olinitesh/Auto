@@ -12,7 +12,7 @@ endif
 
 RUN_PYTHON := $(if $(wildcard $(VENV_PYTHON)),$(VENV_PYTHON),$(PYTHON))
 
-.PHONY: bootstrap up test lint migrate api worker communication warroom web web-prod fallback-ingest fallback-scheduler saved-search-scheduler autopilot-scheduler
+.PHONY: bootstrap up test lint migrate api worker communication warroom web web-prod fallback-ingest fallback-scheduler saved-search-scheduler autopilot-scheduler session-controls-smoke step6-smoke
 
 bootstrap:
 	$(PYTHON) scripts/dev/bootstrap.py
@@ -59,3 +59,10 @@ web:
 web-prod:
 	cd apps/web && npm ci && npm run build && npm run preview -- --host 127.0.0.1 --port 5173
 
+
+session-controls-smoke:
+	PYTHONPATH=services/shared-python:services/api-gateway/src:services/comparison-engine/src $(RUN_PYTHON) -m pytest -q tests/integration/test_api_session_controls.py
+
+
+step6-smoke:
+	PYTHONPATH=services/shared-python:services/api-gateway/src:services/comparison-engine/src $(RUN_PYTHON) -m pytest -q tests/integration/test_api_payloads.py tests/integration/test_playbook_policy.py tests/integration/test_jobs_playbook.py tests/integration/test_api_playbook_routes.py tests/integration/test_api_session_controls.py

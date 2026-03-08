@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
 import importlib.util
@@ -100,7 +100,7 @@ def test_to_session_out_includes_message_metadata_snapshot() -> None:
         channel="email",
         sender_identity="AI Assistant representing Buyer",
         body="Test",
-        created_at=datetime.utcnow(),
+        created_at=datetime.now(UTC),
         message_metadata=message_metadata,
     )
     session = SimpleNamespace(
@@ -121,8 +121,8 @@ def test_to_session_out_includes_message_metadata_snapshot() -> None:
         last_job_id=None,
         last_job_status=None,
         last_job_at=None,
-        created_at=datetime.utcnow(),
-        updated_at=datetime.utcnow(),
+        created_at=datetime.now(UTC),
+        updated_at=datetime.now(UTC),
         messages=[message],
     )
 

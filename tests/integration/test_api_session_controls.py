@@ -96,3 +96,45 @@ def test_enqueue_round_blocks_duplicate_active_job(monkeypatch) -> None:
         api_main.enqueue_autonomous_round("s1", api_main.EnqueueRoundRequest(user_name="Buyer"), db=object())
 
     assert exc.value.status_code == 409
+
+
+def test_reopen_then_enqueue_round_success(monkeypatch) -> None:
+    api_main = load_api_main_module()
+    session = SimpleNamespace(id="s1", status="closed", last_job_status=None)
+    events: list[str] = []
+
+    monkeypatch.setattr(api_main, "get_session_with_messages", lambda db, session_id: session)
+
+    def fake_update_status(db, *, session_id, status, last_job_id=None, last_job_status=None):
+        session.status = status
+        if last_job_status is not None:
+            session.last_job_status = last_job_status
+        return True
+
+    monkeypatch.setattr(api_main, "update_session_status", fake_update_status)
+    monkeypatch.setattr(api_main, "to_session_out", lambda s: {"id": s.id, "status": s.status})
+    monkeypatch.setattr(api_main, "publish_session_event", lambda **kwargs: events.append(kwargs.get("event_type", "")))
+
+    class FakeJob:
+        id = "job-1"
+
+    class FakeQueue:
+        name = "default"
+
+        def enqueue(self, fn, session_id, user_name):
+            assert session_id == "s1"
+            assert user_name == "Buyer"
+            return FakeJob()
+
+    monkeypatch.setattr(api_main, "get_queue", lambda: FakeQueue())
+
+    status_payload = api_main.NegotiationStatusUpdateRequest(status="active", source="warroom", actor="operator")
+    updated = api_main.update_negotiation_status("s1", status_payload, db=object())
+    assert updated["status"] == "active"
+
+    queued = api_main.enqueue_autonomous_round("s1", api_main.EnqueueRoundRequest(user_name="Buyer"), db=object())
+    assert queued.status == "queued"
+    assert queued.job_id == "job-1"
+    assert session.last_job_status == "queued"
+    assert "negotiation.status.updated" in events
+    assert "negotiation.round.queued" in events

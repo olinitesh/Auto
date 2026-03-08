@@ -3,6 +3,7 @@ import os
 import re
 import urllib.error
 import urllib.request
+from contextlib import asynccontextmanager
 from html import unescape
 
 from fastapi import Depends, FastAPI, HTTPException
@@ -79,7 +80,13 @@ from autohaggle_shared.schemas import (
 from scraper_pipeline.fallback_agent import ingest_dealer_data_to_fallback
 from scraper_pipeline.search_service import search_local_offers
 
-app = FastAPI(title="AutoHaggle AI API Gateway", version="0.1.0")
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    init_db()
+    yield
+
+
+app = FastAPI(title="AutoHaggle AI API Gateway", version="0.1.0", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
@@ -592,11 +599,6 @@ def assistant_chat_stream(payload: AssistantChatRequest) -> StreamingResponse:
             )
 
     return StreamingResponse(stream_events(), media_type="text/event-stream")
-
-@app.on_event("startup")
-def startup() -> None:
-    init_db()
-
 
 @app.get("/health", response_model=HealthResponse)
 def health() -> HealthResponse:
