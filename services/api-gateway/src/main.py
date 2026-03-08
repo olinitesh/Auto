@@ -957,6 +957,11 @@ def update_negotiation_session(
     session = get_session_with_messages(db, session_id)
     if not session:
         raise HTTPException(status_code=404, detail="Negotiation session not found")
+    if (session.status or "").strip().lower() in {"closed", "failed"}:
+        raise HTTPException(status_code=409, detail="Playbook cannot be updated for closed/failed sessions")
+
+    previous_playbook = getattr(session, "playbook", None)
+    previous_playbook_policy = getattr(session, "playbook_policy", None)
 
     playbook_key, playbook_policy = resolve_playbook(payload.playbook)
     input_target = float(session.best_offer_otd) if session.best_offer_otd is not None else None
@@ -983,6 +988,8 @@ def update_negotiation_session(
         session_id=session_id,
         event_type="negotiation.playbook.updated",
         payload={
+            "previous_playbook": previous_playbook,
+            "previous_playbook_policy": previous_playbook_policy,
             "playbook": playbook_key,
             "playbook_policy": policy_snapshot,
         },
@@ -1227,10 +1234,16 @@ def to_session_out(session) -> NegotiationSessionOut:
                 sender_identity=message.sender_identity,
                 body=message.body,
                 created_at=message.created_at.isoformat(),
+                metadata=message.message_metadata,
             )
             for message in session.messages
         ],
     )
+
+
+
+
+
 
 
 

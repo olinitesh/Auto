@@ -16,12 +16,31 @@ type NegotiationMessage = {
   sender_identity: string;
   body: string;
   created_at: string;
+  metadata?: Record<string, unknown>;
+};
+
+type PlaybookPolicy = {
+  playbook?: string;
+  tone?: string;
+  effective_target_otd?: number | null;
+  max_rounds?: number;
+  concession_step?: number;
 };
 
 type NegotiationSessionDetail = {
   id: string;
   status: string;
+  playbook?: string;
+  playbook_policy?: PlaybookPolicy | null;
+  best_offer_otd?: number;
   messages: NegotiationMessage[];
+};
+
+type EnqueueRoundResponse = {
+  session_id: string;
+  job_id: string;
+  queue: string;
+  status: string;
 };
 
 type WarRoomPageProps = {
@@ -43,12 +62,40 @@ function formatEventTime(value?: string): string {
   return parsed.toLocaleString();
 }
 
+function eventTitle(event: WarRoomEvent): string {
+  const eventType = (event.event_type || "").trim();
+  if (eventType === "negotiation.playbook.updated") {
+    return "Playbook Changed";
+  }
+  if (eventType === "negotiation.round.queued") {
+    return "Round Queued";
+  }
+  if (eventType === "negotiation.message.sent") {
+    return "Outbound AI Message";
+  }
+  if (eventType === "negotiation.message.received") {
+    return "Inbound Dealer Message";
+  }
+  return eventType || "warroom.event";
+}
+
+function readPolicy(value: unknown): PlaybookPolicy | null {
+  if (!value || typeof value !== "object") {
+    return null;
+  }
+  return value as PlaybookPolicy;
+}
+
 export function WarRoomPage({ sessionId, returnTo }: WarRoomPageProps) {
   const [events, setEvents] = useState<WarRoomEvent[]>([]);
   const [connected, setConnected] = useState(false);
   const [loadingHistory, setLoadingHistory] = useState(false);
   const [historyError, setHistoryError] = useState<string | null>(null);
   const [sessionStatus, setSessionStatus] = useState<string | null>(null);
+  const [sessionDetail, setSessionDetail] = useState<NegotiationSessionDetail | null>(null);
+  const [queueingRound, setQueueingRound] = useState(false);
+  const [queueStatus, setQueueStatus] = useState<string | null>(null);
+  const [queueError, setQueueError] = useState<string | null>(null);
   const socketRef = useRef<WebSocket | null>(null);
 
   const wsUrl = useMemo(() => {
@@ -71,6 +118,11 @@ export function WarRoomPage({ sessionId, returnTo }: WarRoomPageProps) {
     [events],
   );
 
+  const effectiveTarget = useMemo(() => {
+    const value = sessionDetail?.playbook_policy?.effective_target_otd;
+    return typeof value === "number" && Number.isFinite(value) ? value : null;
+  }, [sessionDetail]);
+
   useEffect(() => {
     void loadHistory();
     return () => {
@@ -90,6 +142,7 @@ export function WarRoomPage({ sessionId, returnTo }: WarRoomPageProps) {
       }
 
       const session = (await response.json()) as NegotiationSessionDetail;
+      setSessionDetail(session);
       setSessionStatus(session.status ?? null);
 
       const backfillEvents: WarRoomEvent[] = (session.messages ?? [])
@@ -105,6 +158,7 @@ export function WarRoomPage({ sessionId, returnTo }: WarRoomPageProps) {
             channel: message.channel,
             sender_identity: message.sender_identity,
             body: message.body,
+            metadata: message.metadata ?? {},
           },
         }));
 
@@ -118,6 +172,46 @@ export function WarRoomPage({ sessionId, returnTo }: WarRoomPageProps) {
       setHistoryError(err instanceof Error ? err.message : "Failed to load session history");
     } finally {
       setLoadingHistory(false);
+    }
+  }
+
+  async function queueRound(): Promise<void> {
+    setQueueingRound(true);
+    setQueueError(null);
+    setQueueStatus(null);
+
+    try {
+      const response = await fetch(`${apiBase}/negotiations/${sessionId}/autonomous-round`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ user_name: "Buyer" }),
+      });
+      if (!response.ok) {
+        throw new Error(`Queue round failed (${response.status})`);
+      }
+
+      const data = (await response.json()) as EnqueueRoundResponse;
+      setQueueStatus(`Round queued: ${data.job_id}`);
+      setEvents((prev) => [
+        {
+          event_type: "negotiation.round.queued",
+          session_id: sessionId,
+          timestamp: new Date().toISOString(),
+          payload: {
+            job_id: data.job_id,
+            queue: data.queue,
+            source: "warroom-manual",
+            playbook: sessionDetail?.playbook ?? "balanced",
+            playbook_policy: sessionDetail?.playbook_policy ?? null,
+          },
+        },
+        ...prev,
+      ].slice(0, 100));
+      await loadHistory();
+    } catch (err) {
+      setQueueError(err instanceof Error ? err.message : "Failed to queue round");
+    } finally {
+      setQueueingRound(false);
     }
   }
 
@@ -159,6 +253,7 @@ export function WarRoomPage({ sessionId, returnTo }: WarRoomPageProps) {
           <span className="pill">Events {events.length}</span>
           <span className="pill">Inbound {inboundCount}</span>
           <span className="pill">Outbound {outboundCount}</span>
+          {sessionDetail?.playbook && <span className="pill">Playbook {sessionDetail.playbook}</span>}
         </div>
       </section>
 
@@ -174,6 +269,20 @@ export function WarRoomPage({ sessionId, returnTo }: WarRoomPageProps) {
             {loadingHistory ? "Loading History..." : "Reload History"}
           </button>
         </div>
+        <div className="warroom-preview-row">
+          <span className="pill">Effective Target {effectiveTarget !== null ? `$${effectiveTarget.toLocaleString()}` : "n/a"}</span>
+          {sessionDetail?.playbook_policy?.max_rounds !== undefined && (
+            <span className="pill">Max Rounds {sessionDetail.playbook_policy.max_rounds}</span>
+          )}
+          {sessionDetail?.playbook_policy?.concession_step !== undefined && (
+            <span className="pill">Concession ${Number(sessionDetail.playbook_policy.concession_step).toLocaleString()}</span>
+          )}
+          <button className="btn" type="button" onClick={() => void queueRound()} disabled={queueingRound}>
+            {queueingRound ? "Queueing..." : "Queue Round"}
+          </button>
+        </div>
+        {queueStatus && <p className="success">{queueStatus}</p>}
+        {queueError && <p className="error">{queueError}</p>}
       </section>
 
       {historyError && <p className="error">{historyError}</p>}
@@ -183,19 +292,42 @@ export function WarRoomPage({ sessionId, returnTo }: WarRoomPageProps) {
           <p className="empty">No events yet. Queue a round or wait for inbound dealer events.</p>
         ) : (
           <div className="warroom-feed">
-            {events.map((event, index) => (
-              <article className="warroom-event-card" key={`${event.event_type}-${index}`}>
-                <div className="warroom-event-head">
-                  <strong>{event.event_type}</strong>
-                  <span>{formatEventTime(event.timestamp)}</span>
-                </div>
-                <pre className="warroom-payload">{JSON.stringify(event.payload ?? {}, null, 2)}</pre>
-              </article>
-            ))}
+            {events.map((event, index) => {
+              const payload = event.payload ?? {};
+              const nextPolicy = readPolicy(payload.playbook_policy);
+              const prevPolicy = readPolicy(payload.previous_playbook_policy);
+              const metadata = readPolicy((payload as Record<string, unknown>).metadata);
+              return (
+                <article className="warroom-event-card" key={`${event.event_type}-${index}`}>
+                  <div className="warroom-event-head">
+                    <strong>{eventTitle(event)}</strong>
+                    <span>{formatEventTime(event.timestamp)}</span>
+                  </div>
+                  {event.event_type === "negotiation.playbook.updated" && (
+                    <div className="warroom-event-inline">
+                      <span className="pill">Before {(payload.previous_playbook as string) || "n/a"}</span>
+                      <span className="pill">After {(payload.playbook as string) || "n/a"}</span>
+                      {prevPolicy?.effective_target_otd !== undefined && prevPolicy?.effective_target_otd !== null && (
+                        <span className="pill">Prev Target ${Number(prevPolicy.effective_target_otd).toLocaleString()}</span>
+                      )}
+                      {nextPolicy?.effective_target_otd !== undefined && nextPolicy?.effective_target_otd !== null && (
+                        <span className="pill">New Target ${Number(nextPolicy.effective_target_otd).toLocaleString()}</span>
+                      )}
+                    </div>
+                  )}
+                  {(event.event_type === "negotiation.message.sent" || event.event_type === "history.outbound") && (
+                    <div className="warroom-event-inline">
+                      <span className="pill">Playbook {(payload.playbook as string) || metadata?.playbook || "n/a"}</span>
+                      <span className="pill">Tone {(metadata?.tone as string) || ((metadata?.playbook_policy as PlaybookPolicy | undefined)?.tone ?? "n/a")}</span>
+                    </div>
+                  )}
+                  <pre className="warroom-payload">{JSON.stringify(payload, null, 2)}</pre>
+                </article>
+              );
+            })}
           </div>
         )}
       </section>
     </main>
   );
 }
-

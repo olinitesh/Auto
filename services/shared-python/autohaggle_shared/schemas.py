@@ -220,6 +220,7 @@ class NegotiationMessageOut(BaseModel):
     sender_identity: str
     body: str
     created_at: str
+    metadata: dict | None = None
 
 
 class NegotiationSessionOut(BaseModel):
@@ -243,6 +244,7 @@ class NegotiationSessionOut(BaseModel):
     created_at: str
     updated_at: str
     messages: list[NegotiationMessageOut]
+
 
 class SavedSearchCreateRequest(BaseModel):
     name: str = Field(min_length=1, max_length=160)
@@ -345,6 +347,8 @@ class AssistantChatResponse(BaseModel):
     cited_offer_ids: list[str] = Field(default_factory=list)
     checked_urls: list[str] = Field(default_factory=list)
     model: str | None = None
+
+
 
 
 
