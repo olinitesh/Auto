@@ -266,6 +266,25 @@ body::before {
   align-items: center;
 }
 
+.result-filters {
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.filter-inline {
+  display: inline-flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 0.72rem;
+  color: var(--text-soft);
+  min-width: 160px;
+}
+
+.filter-inline select {
+  min-width: 160px;
+  padding: 7px 8px;
+}
+
 .pill {
   display: inline-flex;
   align-items: center;
@@ -487,6 +506,12 @@ select:focus {
   border-color: rgba(52, 211, 153, 0.48) !important;
   color: #d1fae5 !important;
   background: rgba(15, 92, 67, 0.44) !important;
+}
+
+.tag-onlot {
+  border-color: rgba(16, 185, 129, 0.58) !important;
+  color: #ecfdf5 !important;
+  background: rgba(5, 109, 83, 0.52) !important;
 }
 
 .tag-transit {
@@ -719,6 +744,11 @@ select:focus {
 @media (max-width: 620px) {
   .comparison-page {
     padding: 20px 12px 34px;
+  }
+
+  .filter-inline,
+  .filter-inline select {
+    min-width: 100%;
   }
 
   .sticky-top-stack {

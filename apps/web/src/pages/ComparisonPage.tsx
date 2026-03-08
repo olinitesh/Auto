@@ -266,6 +266,8 @@ type PersistedSearchState = {
   rankedOffers: RankedOffer[];
   historyByKey: Record<string, OfferHistoryResponse>;
   expandedHistoryKeys: Record<string, boolean>;
+  resultDealerFilter?: string;
+  resultTrimFilter?: string;
 };
 
 const apiBase = (import.meta.env.VITE_API_BASE_URL as string | undefined)?.replace(/\/$/, "") || "/api";
@@ -348,6 +350,41 @@ function normalizeModelAndTrim(selectedModel: string, selectedTrim: string): { m
     model: modelValue,
     ...(trimValue ? { trim: trimValue } : {}),
   };
+}
+
+function escapeRegex(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function extractTrimFromVehicleLabel(vehicleLabel: string, selectedMake: string, selectedModel: string): string {
+  const cleanLabel = (vehicleLabel ?? "").replace(/\s+/g, " ").trim();
+  if (!cleanLabel) {
+    return "Unknown";
+  }
+
+  let remainder = cleanLabel.replace(/^\d{4}\s+/, "");
+
+  if (selectedMake.trim()) {
+    const makeRegex = new RegExp(`^${escapeRegex(selectedMake.trim())}\\s+`, "i");
+    remainder = remainder.replace(makeRegex, "");
+  }
+
+  if (selectedModel.trim()) {
+    const modelRegex = new RegExp(`^${escapeRegex(selectedModel.trim())}\\s*`, "i");
+    remainder = remainder.replace(modelRegex, "");
+  }
+
+  const normalized = remainder.trim();
+  if (normalized) {
+    return normalized;
+  }
+
+  const parts = cleanLabel.split(" ");
+  if (parts.length > 3) {
+    return parts.slice(3).join(" ");
+  }
+
+  return "Unknown";
 }
 
 function getAlertSeverity(alertType: string): AlertSeverity {
@@ -461,6 +498,8 @@ export function ComparisonPage() {
       setRankedOffers(Array.isArray(persisted.rankedOffers) ? persisted.rankedOffers : []);
       setHistoryByKey(persisted.historyByKey ?? {});
       setExpandedHistoryKeys(persisted.expandedHistoryKeys ?? {});
+      setResultDealerFilter((persisted.resultDealerFilter ?? initialUrlParams.get("resultDealer") ?? "all") || "all");
+      setResultTrimFilter((persisted.resultTrimFilter ?? initialUrlParams.get("resultTrim") ?? "all") || "all");
     }
 
     setSearchStateHydrated(true);
@@ -550,6 +589,8 @@ export function ComparisonPage() {
   const [catalogMaxOtd, setCatalogMaxOtd] = useState(initialUrlParams.get("catalogMaxOtd") ?? "");
   const [catalogMinDom, setCatalogMinDom] = useState(initialUrlParams.get("catalogMinDom") ?? "");
   const [catalogMaxDom, setCatalogMaxDom] = useState(initialUrlParams.get("catalogMaxDom") ?? "");
+  const [resultDealerFilter, setResultDealerFilter] = useState(() => initialUrlParams.get("resultDealer") ?? "all");
+  const [resultTrimFilter, setResultTrimFilter] = useState(() => initialUrlParams.get("resultTrim") ?? "all");
 
   const targetPreview = useMemo(() => {
     const t = trim.trim();
@@ -570,6 +611,51 @@ export function ComparisonPage() {
   const pagedAlerts = useMemo(() => {
     return filteredAlerts;
   }, [filteredAlerts]);
+
+  const allResultOffers = useMemo(() => {
+    return [...offers, ...rankedOffers.map((item) => item.offer)];
+  }, [offers, rankedOffers]);
+
+  const resultDealerOptions = useMemo(() => {
+    const names = allResultOffers
+      .map((offer) => (offer.dealership_name ?? "").trim())
+      .filter((value) => value.length > 0);
+    return Array.from(new Set(names)).sort((a, b) => a.localeCompare(b));
+  }, [allResultOffers]);
+
+  const resultTrimOptions = useMemo(() => {
+    const trims = allResultOffers
+      .map((offer) => extractTrimFromVehicleLabel(offer.vehicle_label, make, model))
+      .filter((value) => value.length > 0);
+    return Array.from(new Set(trims)).sort((a, b) => a.localeCompare(b));
+  }, [allResultOffers, make, model]);
+
+  const filteredOffers = useMemo(() => {
+    return offers.filter((offer) => {
+      if (resultDealerFilter !== "all" && offer.dealership_name !== resultDealerFilter) {
+        return false;
+      }
+      if (resultTrimFilter !== "all") {
+        const offerTrim = extractTrimFromVehicleLabel(offer.vehicle_label, make, model);
+        return offerTrim === resultTrimFilter;
+      }
+      return true;
+    });
+  }, [offers, resultDealerFilter, resultTrimFilter, make, model]);
+
+  const filteredRankedOffers = useMemo(() => {
+    return rankedOffers.filter((item) => {
+      const offer = item.offer;
+      if (resultDealerFilter !== "all" && offer.dealership_name !== resultDealerFilter) {
+        return false;
+      }
+      if (resultTrimFilter !== "all") {
+        const offerTrim = extractTrimFromVehicleLabel(offer.vehicle_label, make, model);
+        return offerTrim === resultTrimFilter;
+      }
+      return true;
+    });
+  }, [rankedOffers, resultDealerFilter, resultTrimFilter, make, model]);
 
   const sessionByOfferId = useMemo(() => {
     const map = new Map<string, NegotiationSession>();
@@ -610,6 +696,18 @@ export function ComparisonPage() {
   }, [alertsPage, alertsTotalPages]);
 
   useEffect(() => {
+    if (resultDealerFilter !== "all" && !resultDealerOptions.includes(resultDealerFilter)) {
+      setResultDealerFilter("all");
+    }
+  }, [resultDealerFilter, resultDealerOptions]);
+
+  useEffect(() => {
+    if (resultTrimFilter !== "all" && !resultTrimOptions.includes(resultTrimFilter)) {
+      setResultTrimFilter("all");
+    }
+  }, [resultTrimFilter, resultTrimOptions]);
+
+  useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     params.set("workspace", workspaceView);
     params.set("alertType", alertTypeFilter);
@@ -630,6 +728,8 @@ export function ComparisonPage() {
     params.set("catalogMaxOtd", catalogMaxOtd);
     params.set("catalogMinDom", catalogMinDom);
     params.set("catalogMaxDom", catalogMaxDom);
+    params.set("resultDealer", resultDealerFilter);
+    params.set("resultTrim", resultTrimFilter);
 
     const next = `${window.location.pathname}?${params.toString()}`;
     window.history.replaceState({}, "", next);
@@ -663,6 +763,8 @@ export function ComparisonPage() {
     catalogMaxOtd,
     catalogMinDom,
     catalogMaxDom,
+    resultDealerFilter,
+    resultTrimFilter,
   ]);
 
 
@@ -688,6 +790,8 @@ export function ComparisonPage() {
       rankedOffers,
       historyByKey,
       expandedHistoryKeys,
+      resultDealerFilter,
+      resultTrimFilter,
     });
   }, [
     searchStateHydrated,
@@ -707,6 +811,8 @@ export function ComparisonPage() {
     rankedOffers,
     historyByKey,
     expandedHistoryKeys,
+    resultDealerFilter,
+    resultTrimFilter,
   ]);
 
   useEffect(() => {
@@ -2784,14 +2890,36 @@ export function ComparisonPage() {
         <article className="panel">
           <div className="panel-header">
             <h2>Search Results</h2>
-            <span className="pill">{offers.length} offers</span>
+            <div className="panel-head-actions result-filters">
+              <span className="pill">{filteredOffers.length} / {offers.length} offers</span>
+              <label className="filter-inline">
+                Dealer
+                <select value={resultDealerFilter} onChange={(e) => setResultDealerFilter(e.target.value)}>
+                  <option value="all">All Dealers</option>
+                  {resultDealerOptions.map((dealer) => (
+                    <option key={dealer} value={dealer}>{dealer}</option>
+                  ))}
+                </select>
+              </label>
+              <label className="filter-inline">
+                Trim
+                <select value={resultTrimFilter} onChange={(e) => setResultTrimFilter(e.target.value)}>
+                  <option value="all">All Trims</option>
+                  {resultTrimOptions.map((trimValue) => (
+                    <option key={trimValue} value={trimValue}>{trimValue}</option>
+                  ))}
+                </select>
+              </label>
+            </div>
           </div>
 
           {offers.length === 0 ? (
             <p className="empty">No offers yet. Run a search to populate your shortlist.</p>
+          ) : filteredOffers.length === 0 ? (
+            <p className="empty">No search results match the current Dealer/Trim filters.</p>
           ) : (
             <div className="offer-list">
-                            {offers.map((offer) => {
+                            {filteredOffers.map((offer) => {
                 const listingHref = normalizeExternalUrl(offer.listing_url);
                 const dealerHref = normalizeExternalUrl(offer.dealer_url);
                 const signals = buildOfferSignals(offer);
@@ -2875,14 +3003,36 @@ export function ComparisonPage() {
         <article className="panel">
           <div className="panel-header">
             <h2>Ranked Shortlist</h2>
-            <span className="pill">{rankedOffers.length} ranked</span>
+            <div className="panel-head-actions result-filters">
+              <span className="pill">{filteredRankedOffers.length} / {rankedOffers.length} ranked</span>
+              <label className="filter-inline">
+                Dealer
+                <select value={resultDealerFilter} onChange={(e) => setResultDealerFilter(e.target.value)}>
+                  <option value="all">All Dealers</option>
+                  {resultDealerOptions.map((dealer) => (
+                    <option key={dealer} value={dealer}>{dealer}</option>
+                  ))}
+                </select>
+              </label>
+              <label className="filter-inline">
+                Trim
+                <select value={resultTrimFilter} onChange={(e) => setResultTrimFilter(e.target.value)}>
+                  <option value="all">All Trims</option>
+                  {resultTrimOptions.map((trimValue) => (
+                    <option key={trimValue} value={trimValue}>{trimValue}</option>
+                  ))}
+                </select>
+              </label>
+            </div>
           </div>
 
           {rankedOffers.length === 0 ? (
             <p className="empty">Ranked results appear automatically after Search + Rank Offers.</p>
+          ) : filteredRankedOffers.length === 0 ? (
+            <p className="empty">No ranked offers match the current Dealer/Trim filters.</p>
           ) : (
             <div className="offer-list">
-                            {rankedOffers.map((item) => {
+                            {filteredRankedOffers.map((item) => {
                 const listingHref = normalizeExternalUrl(item.offer.listing_url);
                 const dealerHref = normalizeExternalUrl(item.offer.dealer_url);
                 const activeSession = sessionByOfferId.get(item.offer.offer_id);
@@ -2890,6 +3040,7 @@ export function ComparisonPage() {
                 const inventoryStatus = (item.offer.inventory_status ?? "").trim();
                 const normalizedInventoryStatus = inventoryStatus.toLowerCase();
                 const isAvailable = normalizedInventoryStatus.includes("available") && !item.offer.is_pre_sold;
+                const isOnLotAvailable = isAvailable && !item.offer.is_in_transit && !item.offer.is_hidden;
 
                 return (
                   <div className={`rank-card${item.rank === 1 ? " best" : ""}`} key={`${item.offer.offer_id}-${item.rank}`}>
@@ -2913,8 +3064,9 @@ export function ComparisonPage() {
                       {item.offer.dealer_discount !== undefined && item.offer.dealer_discount > 0 && <span title="Dealer discount derived from MSRP minus advertised price.">Discount ${item.offer.dealer_discount.toLocaleString()}</span>}
                       {item.offer.listed_price !== undefined && <span title="Primary listed price used for OTD computation.">List ${item.offer.listed_price.toLocaleString()}</span>}
                       {item.offer.vin && <span title="Vehicle identification number from source listing.">VIN {item.offer.vin}</span>}
-                      {isAvailable && <span className="tag tag-available" title="Listing is currently marked available.">Available</span>}
-                      {item.offer.is_in_transit && <span className="tag tag-transit" title="Vehicle is in transit.">In-Transit</span>}
+                      {isAvailable && <span className="tag tag-available" title="Listing feed marks this vehicle as available.">Available</span>}
+                      {isOnLotAvailable && <span className="tag tag-onlot" title="Available and not marked in-transit, hidden, or pre-sold.">On Lot</span>}
+                      {item.offer.is_in_transit && <span className="tag tag-transit" title="Vehicle is in transit. DOM can still increase because DOM is listing age, not guaranteed time on lot.">In-Transit</span>}
                       {item.offer.is_pre_sold && <span className="tag tag-presold" title="Vehicle is marked pre-sold.">Pre-Sold</span>}
                       {item.offer.is_hidden && <span className="tag tag-hidden" title="Listing is hidden inventory.">Hidden</span>}
                       {inventoryStatus && !isAvailable && <span className="tag tag-status" title="Inventory status from source data.">Status {inventoryStatus}</span>}
@@ -2926,7 +3078,7 @@ export function ComparisonPage() {
                         Fees {item.score_breakdown.fee_score ?? 0}
                       </span>
                       {item.offer.days_on_market !== undefined && (
-                        <span title="Days on market tracked for this listing.">DOM {item.offer.days_on_market}d</span>
+                        <span title="Days Listed in source feeds. This can include pre-arrival or in-transit time, not only days physically on dealer lot.">DOM {item.offer.days_on_market}d</span>
                       )}
                       {item.offer.days_on_market_bucket && (
                         <span title="Grouped market-age band derived from days on market.">DOM Bucket {item.offer.days_on_market_bucket}</span>
