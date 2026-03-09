@@ -10,11 +10,18 @@ class Settings(BaseSettings):
     database_url: str = "postgresql+psycopg://autohaggle:autohaggle@localhost:5432/autohaggle"
     redis_url: str = "redis://localhost:6379/0"
     communication_service_url: str = "http://localhost:8010"
+    email_provider: str = "sendgrid"
+    webhook_shared_secret: str | None = None
     twilio_account_sid: str | None = None
     twilio_auth_token: str | None = None
     twilio_phone_number: str | None = None
     sendgrid_api_key: str | None = None
     sendgrid_from_email: str | None = None
+    gmail_smtp_host: str = "smtp.gmail.com"
+    gmail_smtp_port: int = 587
+    gmail_username: str | None = None
+    gmail_app_password: str | None = None
+    gmail_from_email: str | None = None
     marketcheck_api_key: str | None = None
     marketcheck_base_url: str = "https://api.marketcheck.com/v2/search/car/active"
     dealer_direct_scrape_enabled: bool = False
@@ -31,4 +38,3 @@ class Settings(BaseSettings):
 
 
 settings = Settings()
-

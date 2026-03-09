@@ -1,6 +1,6 @@
+from pydantic import BaseModel
 from sendgrid import SendGridAPIClient
 from sendgrid.helpers.mail import Mail
-from pydantic import BaseModel
 
 from autohaggle_shared.config import settings
 
@@ -28,8 +28,16 @@ def send_email(to_email: str, subject: str, body: str) -> EmailResult:
     client = SendGridAPIClient(settings.sendgrid_api_key)
     response = client.send(message)
     provider_id = response.headers.get("X-Message-Id")
+
+    if 200 <= int(response.status_code) < 300:
+        return EmailResult(
+            status="sent",
+            provider_message_id=provider_id,
+            detail=f"SendGrid status={response.status_code}",
+        )
+
     return EmailResult(
-        status="sent",
+        status="error",
         provider_message_id=provider_id,
         detail=f"SendGrid status={response.status_code}",
     )

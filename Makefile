@@ -61,8 +61,8 @@ web-prod:
 
 
 session-controls-smoke:
-	PYTHONPATH=services/shared-python:services/api-gateway/src:services/comparison-engine/src $(RUN_PYTHON) -m pytest -q tests/integration/test_api_session_controls.py
+	PYTHONPATH=services/shared-python:services/api-gateway/src:services/comparison-engine/src $(RUN_PYTHON) -m pytest -q tests/integration/test_api_session_controls.py tests/integration/test_api_session_controls_http.py tests/integration/test_communication_webhooks.py tests/integration/test_sendgrid_provider.py tests/integration/test_gmail_provider.py tests/integration/test_email_provider_routing.py tests/integration/test_email_test_endpoint.py
 
 
 step6-smoke:
-	PYTHONPATH=services/shared-python:services/api-gateway/src:services/comparison-engine/src $(RUN_PYTHON) -m pytest -q tests/integration/test_api_payloads.py tests/integration/test_playbook_policy.py tests/integration/test_jobs_playbook.py tests/integration/test_api_playbook_routes.py tests/integration/test_api_session_controls.py
+	PYTHONPATH=services/shared-python:services/api-gateway/src:services/comparison-engine/src $(RUN_PYTHON) -m pytest -q tests/integration/test_api_payloads.py tests/integration/test_playbook_policy.py tests/integration/test_jobs_playbook.py tests/integration/test_api_playbook_routes.py tests/integration/test_api_session_controls.py tests/integration/test_api_session_controls_http.py tests/integration/test_communication_webhooks.py tests/integration/test_sendgrid_provider.py tests/integration/test_gmail_provider.py tests/integration/test_email_provider_routing.py tests/integration/test_email_test_endpoint.py
