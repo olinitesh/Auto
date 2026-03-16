@@ -2,7 +2,7 @@
 set -euo pipefail
 
 # ---------- EDIT THESE ----------
-REPO_URL="https://github.com/<your-org>/<your-repo>.git"
+REPO_URL="https://github.com/olinitesh/Auto.git"
 APP_DIR="/opt/Auto"
 DOMAIN_OR_IP="192.168.1.50"   # your VM LAN IP or local DNS name
 INSTALL_NGINX="1"             # 1=yes, 0=no
