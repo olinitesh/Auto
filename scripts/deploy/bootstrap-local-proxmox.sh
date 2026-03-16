@@ -2,9 +2,9 @@
 set -euo pipefail
 
 # ---------- EDIT THESE ----------
-REPO_URL="https://github.com/<your-org>/<your-repo>.git"
+REPO_URL="https://github.com/olinitesh/Auto.git"
 APP_DIR="/opt/Auto"
-DOMAIN_OR_IP="192.168.1.50"   # your VM LAN IP or local DNS name
+DOMAIN_OR_IP="192.168.1.60"   # your VM LAN IP or local DNS name
 INSTALL_NGINX="1"             # 1=yes, 0=no
 # -------------------------------
 
@@ -14,10 +14,18 @@ sudo apt-get install -y \
   git curl wget ca-certificates gnupg lsb-release \
   build-essential make jq unzip \
   python3 python3-pip python3-venv \
-  docker.io docker-compose-plugin
+  docker.io
 
 echo "[2/8] Enabling Docker..."
 sudo systemctl enable --now docker
+
+echo "[2.1/8] Ensuring Docker Compose v2 is available..."
+if ! docker compose version >/dev/null 2>&1; then
+  sudo apt-get install -y docker-compose-v2 || true
+fi
+if ! docker compose version >/dev/null 2>&1; then
+  curl -fsSL https://get.docker.com | sudo sh
+fi
 
 echo "[3/8] Installing Node.js 20..."
 curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -
