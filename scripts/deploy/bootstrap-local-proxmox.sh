@@ -7,6 +7,7 @@ APP_DIR="/opt/Auto"
 DOMAIN_OR_IP="192.168.1.60"   # your VM LAN IP or local DNS name
 INSTALL_NGINX="1"             # 1=yes, 0=no
 # -------------------------------
+APP_USER="${SUDO_USER:-$USER}"
 
 echo "[1/8] Installing system dependencies..."
 sudo apt-get update
@@ -43,7 +44,7 @@ if [ ! -d "$APP_DIR/.git" ]; then
   sudo mkdir -p "$(dirname "$APP_DIR")"
   sudo git clone "$REPO_URL" "$APP_DIR"
 fi
-sudo chown -R "$USER:$USER" "$APP_DIR"
+sudo chown -R "$APP_USER:$APP_USER" "$APP_DIR"
 cd "$APP_DIR"
 
 echo "[6/8] Creating .env from template (if missing)..."
@@ -53,7 +54,7 @@ if [ ! -f .env ]; then
 fi
 
 echo "[7/8] Running Proxmox deploy script..."
-sudo INSTALL_NGINX="$INSTALL_NGINX" DOMAIN="$DOMAIN_OR_IP" bash scripts/deploy/proxmox-deploy.sh
+sudo APP_USER="$APP_USER" APP_DIR="$APP_DIR" REPO_URL="$REPO_URL" INSTALL_NGINX="$INSTALL_NGINX" DOMAIN="$DOMAIN_OR_IP" bash scripts/deploy/proxmox-deploy.sh
 
 echo "[8/8] Enabling/starting services..."
 sudo systemctl daemon-reload
@@ -63,6 +64,60 @@ sudo systemctl enable --now \
   autohaggle-communication \
   autohaggle-warroom \
   autohaggle-web
+
+if [[ "$INSTALL_NGINX" == "1" ]]; then
+  echo "[8.1/8] Running nginx maintenance (site file/link/validation)..."
+  sudo apt-get install -y nginx
+  sudo tee /etc/nginx/sites-available/autohaggle >/dev/null <<'EOF'
+server {
+  listen 80;
+  server_name _;
+
+  location / {
+    proxy_pass http://127.0.0.1:5173;
+    proxy_http_version 1.1;
+    proxy_set_header Host $host;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto $scheme;
+  }
+
+  location /api/ {
+    proxy_pass http://127.0.0.1:8000/;
+    proxy_http_version 1.1;
+    proxy_set_header Host $host;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto $scheme;
+  }
+
+  location /comm/ {
+    proxy_pass http://127.0.0.1:8010/;
+    proxy_http_version 1.1;
+    proxy_set_header Host $host;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto $scheme;
+  }
+
+  location /ws/ {
+    proxy_pass http://127.0.0.1:8020/ws/;
+    proxy_http_version 1.1;
+    proxy_set_header Upgrade $http_upgrade;
+    proxy_set_header Connection "upgrade";
+    proxy_set_header Host $host;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto $scheme;
+  }
+}
+EOF
+  sudo ln -sf /etc/nginx/sites-available/autohaggle /etc/nginx/sites-enabled/autohaggle
+  sudo rm -f /etc/nginx/sites-enabled/default
+  sudo nginx -t
+  sudo systemctl enable --now nginx
+  sudo systemctl restart nginx
+fi
 
 echo
 echo "Deployment complete."

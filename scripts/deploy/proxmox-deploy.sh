@@ -6,7 +6,7 @@ set -euo pipefail
 
 APP_NAME="${APP_NAME:-autohaggle}"
 APP_USER="${APP_USER:-$USER}"
-APP_DIR="${APP_DIR:-/opt/autohaggle}"
+APP_DIR="${APP_DIR:-/opt/Auto}"
 REPO_URL="${REPO_URL:-}"
 REPO_BRANCH="${REPO_BRANCH:-main}"
 ENV_FILE="${ENV_FILE:-.env}"
