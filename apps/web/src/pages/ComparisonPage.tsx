@@ -674,6 +674,7 @@ export function ComparisonPage() {
   const [loadingCatalog, setLoadingCatalog] = useState(false);
   const [loadingCatalogRank, setLoadingCatalogRank] = useState(false);
   const [catalogRankedOffers, setCatalogRankedOffers] = useState<RankedOffer[]>([]);
+  const [catalogInsightOpenByOfferId, setCatalogInsightOpenByOfferId] = useState<Record<string, boolean>>({});
   const [catalogFilters, setCatalogFilters] = useState<OfferCatalogFilterOptions>({
     dealers: [],
     cities: [],
@@ -740,6 +741,25 @@ export function ComparisonPage() {
 
     return { total, city, state, zip };
   }, [catalogOffers]);
+
+  const catalogRankByOfferId = useMemo(() => {
+    const map = new Map<string, RankedOffer>();
+    for (const item of catalogRankedOffers) {
+      map.set(item.offer.offer_id, item);
+    }
+    return map;
+  }, [catalogRankedOffers]);
+
+  const catalogEffectiveBudget = useMemo(() => {
+    if (Number.isFinite(budgetOtd) && budgetOtd > 0) {
+      return budgetOtd;
+    }
+    if (catalogOffers.length === 0) {
+      return 0;
+    }
+    const total = catalogOffers.reduce((sum, offer) => sum + (Number.isFinite(offer.otd_price) ? offer.otd_price : 0), 0);
+    return Math.max(1, Math.round(total / catalogOffers.length));
+  }, [budgetOtd, catalogOffers]);
 
   const resultDealerOptions = useMemo(() => {
     const names = allResultOffers
@@ -1196,6 +1216,7 @@ export function ComparisonPage() {
       }
       setCatalogOffers(data.offers ?? []);
       setCatalogRankedOffers([]);
+      setCatalogInsightOpenByOfferId({});
       setCatalogTotal(Number(data.total ?? 0));
       setCatalogTotalPages(Number(data.total_pages ?? 1));
       setCatalogPage((prev) => {
@@ -1424,7 +1445,12 @@ export function ComparisonPage() {
     setCatalogMinDom("");
     setCatalogMaxDom("");
     setCatalogRankedOffers([]);
+    setCatalogInsightOpenByOfferId({});
     setCatalogPage(1);
+  }
+
+  function toggleCatalogInsight(offerId: string) {
+    setCatalogInsightOpenByOfferId((prev) => ({ ...prev, [offerId]: !prev[offerId] }));
   }
 
   async function rankCatalogCurrentOffers() {
@@ -3085,6 +3111,70 @@ export function ComparisonPage() {
               {catalogOffers.map((offer) => {
                 const listingHref = normalizeExternalUrl(offer.listing_url);
                 const dealerHref = normalizeExternalUrl(offer.dealer_url);
+                const rankedItem = catalogRankByOfferId.get(offer.offer_id);
+                const insightOpen = catalogInsightOpenByOfferId[offer.offer_id] === true;
+
+                const norm = (value?: string | null) => (value ?? "").trim().toLowerCase();
+                const includesNorm = (value: string, needle: string) => value.toLowerCase().includes(needle.toLowerCase());
+
+                const minOtdValue = catalogMinOtd.trim() ? Number(catalogMinOtd) : null;
+                const maxOtdValue = catalogMaxOtd.trim() ? Number(catalogMaxOtd) : null;
+                const minDomValue = catalogMinDom.trim() ? Number(catalogMinDom) : null;
+                const maxDomValue = catalogMaxDom.trim() ? Number(catalogMaxDom) : null;
+
+                const activeChecks: Array<{ label: string; pass: boolean; value: string }> = [];
+                if (catalogDealerNames.length > 0) {
+                  const pass = catalogDealerNames.some((dealer) => norm(dealer) === norm(offer.dealership_name));
+                  activeChecks.push({ label: "Dealer", pass, value: offer.dealership_name });
+                }
+                if (catalogCity.trim()) {
+                  const pass = norm(offer.dealer_city) === norm(catalogCity);
+                  activeChecks.push({ label: "City", pass, value: offer.dealer_city ?? "missing" });
+                }
+                if (catalogState.trim()) {
+                  const pass = norm(offer.dealer_state) === norm(catalogState);
+                  activeChecks.push({ label: "State", pass, value: offer.dealer_state ?? "missing" });
+                }
+                if (catalogZip.trim()) {
+                  const pass = norm(offer.dealer_zipcode).startsWith(norm(catalogZip));
+                  activeChecks.push({ label: "Zipcode", pass, value: offer.dealer_zipcode ?? "missing" });
+                }
+                if (catalogMake.trim()) {
+                  const pass = includesNorm(offer.vehicle_label, catalogMake.trim());
+                  activeChecks.push({ label: "Make", pass, value: offer.vehicle_label });
+                }
+                if (catalogModel.trim()) {
+                  const pass = includesNorm(offer.vehicle_label, catalogModel.trim());
+                  activeChecks.push({ label: "Model", pass, value: offer.vehicle_label });
+                }
+                if (minOtdValue != null && Number.isFinite(minOtdValue)) {
+                  const pass = offer.otd_price >= minOtdValue;
+                  activeChecks.push({ label: "Min OTD", pass, value: `$${offer.otd_price.toLocaleString()}` });
+                }
+                if (maxOtdValue != null && Number.isFinite(maxOtdValue)) {
+                  const pass = offer.otd_price <= maxOtdValue;
+                  activeChecks.push({ label: "Max OTD", pass, value: `$${offer.otd_price.toLocaleString()}` });
+                }
+                if (minDomValue != null && Number.isFinite(minDomValue)) {
+                  const dom = offer.days_on_market ?? -1;
+                  const pass = dom >= minDomValue;
+                  activeChecks.push({ label: "Min DOM", pass, value: dom >= 0 ? `${dom}d` : "missing" });
+                }
+                if (maxDomValue != null && Number.isFinite(maxDomValue)) {
+                  const dom = offer.days_on_market ?? Number.POSITIVE_INFINITY;
+                  const pass = dom <= maxDomValue;
+                  activeChecks.push({ label: "Max DOM", pass, value: Number.isFinite(dom) ? `${dom}d` : "missing" });
+                }
+
+                const missingFields = [
+                  !offer.vin ? "VIN" : null,
+                  offer.msrp == null ? "MSRP" : null,
+                  offer.advertised_price == null ? "Advertised Price" : null,
+                  !offer.dealer_city ? "City" : null,
+                  !offer.dealer_state ? "State" : null,
+                  !offer.dealer_zipcode ? "Zipcode" : null,
+                ].filter((item): item is string => item !== null);
+
                 return (
                   <div className="offer-card" key={`catalog-${offer.offer_id}`}>
                     <div className="offer-head">
@@ -3128,7 +3218,62 @@ export function ComparisonPage() {
                           Dealer Site
                         </a>
                       )}
+                      <button className="btn" type="button" onClick={() => toggleCatalogInsight(offer.offer_id)}>
+                        {insightOpen ? "Hide Why This Result" : "Why This Result"}
+                      </button>
                     </div>
+                    {insightOpen && (
+                      <div className="insight-panel">
+                        <div className="insight-grid">
+                          <div>
+                            <strong>Ranking</strong>
+                            <ul className="insight-list">
+                              <li>Budget baseline: ${catalogEffectiveBudget.toLocaleString()}</li>
+                              <li>OTD delta: ${(offer.otd_price - catalogEffectiveBudget).toLocaleString()}</li>
+                              <li>Fees + Adj: ${(offer.fees + offer.market_adjustment).toLocaleString()}</li>
+                              <li>Specs score: {offer.specs_score.toFixed(1)}/100</li>
+                              {rankedItem ? (
+                                <>
+                                  <li>Rank score: {rankedItem.score}</li>
+                                  <li>
+                                    Breakdown P/S/F: {Math.round(rankedItem.score_breakdown.price_score ?? 0)}/
+                                    {Math.round(rankedItem.score_breakdown.specs_score ?? 0)}/
+                                    {Math.round(rankedItem.score_breakdown.fee_score ?? 0)}
+                                  </li>
+                                </>
+                              ) : (
+                                <li>Not in ranked set yet. Click Rank Shortlist.</li>
+                              )}
+                            </ul>
+                          </div>
+                          <div>
+                            <strong>Filter Checks</strong>
+                            {activeChecks.length === 0 ? (
+                              <p className="empty">No active filters.</p>
+                            ) : (
+                              <ul className="insight-list">
+                                {activeChecks.map((check) => (
+                                  <li key={`${offer.offer_id}-${check.label}`} className={check.pass ? "insight-pass" : "insight-fail"}>
+                                    {check.label}: {check.pass ? "match" : "no match"} ({check.value})
+                                  </li>
+                                ))}
+                              </ul>
+                            )}
+                          </div>
+                          <div>
+                            <strong>Data Quality</strong>
+                            <ul className="insight-list">
+                              <li>Geo fields: {offer.dealer_city ? "city" : "-"} {offer.dealer_state ? "state" : "-"} {offer.dealer_zipcode ? "zip" : "-"}</li>
+                              <li>Provider: {offer.data_provider ?? "unknown"}</li>
+                              <li>DOM source: {offer.days_on_market_source ?? "unknown"}</li>
+                              <li>
+                                Missing critical fields: {missingFields.length === 0 ? "none" : missingFields.join(", ")}
+                              </li>
+                            </ul>
+                          </div>
+                        </div>
+                      </div>
+                    )}
                   </div>
                 );
               })}
