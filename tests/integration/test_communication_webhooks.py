@@ -29,8 +29,10 @@ class FakeDb:
         return None
 
 
-def _client_for(communication_main):
+def _client_for(communication_main, reset_secret: bool = True):
     communication_main.init_db = lambda: None
+    if reset_secret:
+        communication_main.settings.webhook_shared_secret = None
 
     def fake_get_db():
         yield FakeDb()
@@ -165,12 +167,16 @@ def test_webhook_returns_404_when_session_not_found(monkeypatch) -> None:
 def test_webhook_secret_enforced_when_configured(monkeypatch) -> None:
     communication_main = load_communication_module()
     monkeypatch.setattr(communication_main.settings, "webhook_shared_secret", "top-secret", raising=False)
-    monkeypatch.setattr(communication_main, "get_session_with_messages", lambda db, session_id: SimpleNamespace(id="s1", autopilot_enabled=False, last_job_status=None))
+    monkeypatch.setattr(
+        communication_main,
+        "get_session_with_messages",
+        lambda db, session_id: SimpleNamespace(id="s1", autopilot_enabled=False, last_job_status=None),
+    )
     monkeypatch.setattr(communication_main, "add_message", lambda **kwargs: SimpleNamespace(id="m3", body=kwargs["body"]))
     monkeypatch.setattr(communication_main, "update_session_status", lambda *args, **kwargs: True)
     monkeypatch.setattr(communication_main, "publish_session_event", lambda **kwargs: None)
 
-    with _client_for(communication_main) as client:
+    with _client_for(communication_main, reset_secret=False) as client:
         unauthorized = client.post(
             "/webhooks/twilio/sms",
             json={

@@ -740,8 +740,10 @@ def search_offers(payload: OfferSearchRequest, db: Session = Depends(get_db)) ->
 def offer_catalog(
     dealer_id: str | None = None,
     dealer_name: str | None = None,
+    dealer_names: str | None = None,
     city: str | None = None,
     state: str | None = None,
+    zipcode: str | None = None,
     make: str | None = None,
     model: str | None = None,
     min_otd: float | None = None,
@@ -752,12 +754,16 @@ def offer_catalog(
     page_size: int = 50,
     db: Session = Depends(get_db),
 ) -> OfferCatalogResponse:
+    parsed_dealer_names = [name.strip() for name in (dealer_names or "").split(",") if name.strip()] or None
+
     offers, total, filters = list_offer_catalog(
         db,
         dealer_id=dealer_id,
         dealer_name=dealer_name,
+        dealer_names=parsed_dealer_names,
         city=city,
         state=state,
+        zipcode=zipcode,
         make=make,
         model=model,
         min_otd=min_otd,
@@ -936,7 +942,7 @@ def start_negotiation(payload: StartNegotiationRequest, db: Session = Depends(ge
     delivery = {"status": "not_sent", "reason": "missing_dealer_contact"}
     try:
         if payload.dealership_email:
-            delivery = send_negotiation_email(payload.dealership_email, strategy["response_text"])
+            delivery = send_negotiation_email(payload.dealership_email, strategy["response_text"], session.id)
         elif payload.dealership_phone:
             delivery = send_negotiation_sms(payload.dealership_phone, strategy["response_text"])
     except Exception as exc:

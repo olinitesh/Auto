@@ -62,7 +62,7 @@ def run_autonomous_round(session_id: str, user_name: str) -> dict:
         delivery = {"status": "not_sent", "reason": "missing_dealer_contact"}
         try:
             if session.dealer and session.dealer.email:
-                delivery = send_negotiation_email(session.dealer.email, decision["response_text"])
+                delivery = send_negotiation_email(session.dealer.email, decision["response_text"], session_id)
             elif session.dealer and session.dealer.phone:
                 delivery = send_negotiation_sms(session.dealer.phone, decision["response_text"])
         except Exception as exc:

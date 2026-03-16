@@ -40,6 +40,9 @@ class DealerOffer(BaseModel):
     offer_id: str
     dealership_id: str
     dealership_name: str
+    dealer_city: str | None = None
+    dealer_state: str | None = None
+    dealer_zipcode: str | None = None
     distance_miles: float = Field(ge=0)
     vehicle_id: str
     vehicle_label: str
@@ -80,6 +83,7 @@ class OfferCatalogFilterOptions(BaseModel):
     dealers: list[DealerFilterOption]
     cities: list[str]
     states: list[str]
+    zipcodes: list[str]
     makes: list[str]
     models: list[str]
 

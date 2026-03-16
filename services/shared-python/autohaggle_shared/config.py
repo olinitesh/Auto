@@ -19,6 +19,8 @@ class Settings(BaseSettings):
     sendgrid_from_email: str | None = None
     gmail_smtp_host: str = "smtp.gmail.com"
     gmail_smtp_port: int = 587
+    gmail_imap_host: str = "imap.gmail.com"
+    gmail_imap_port: int = 993
     gmail_username: str | None = None
     gmail_app_password: str | None = None
     gmail_from_email: str | None = None

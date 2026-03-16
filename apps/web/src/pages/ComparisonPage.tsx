@@ -23,6 +23,9 @@ type DealerOffer = {
   offer_id: string;
   dealership_id: string;
   dealership_name: string;
+  dealer_city?: string | null;
+  dealer_state?: string | null;
+  dealer_zipcode?: string | null;
   distance_miles: number;
   vehicle_id: string;
   vehicle_label: string;
@@ -150,6 +153,7 @@ type OfferCatalogFilterOptions = {
   dealers: DealerFilterOption[];
   cities: string[];
   states: string[];
+  zipcodes: string[];
   makes: string[];
   models: string[];
 };
@@ -659,6 +663,7 @@ export function ComparisonPage() {
   const [headerStackScrolled, setHeaderStackScrolled] = useState(false);
   const [showScrollTopButton, setShowScrollTopButton] = useState(false);
   const copilotDrawerThreadRef = useRef<HTMLDivElement | null>(null);
+  const catalogRequestSeqRef = useRef(0);
   const [chatSuggestions, setChatSuggestions] = useState<string[]>([]);
   const [chatMessages, setChatMessages] = useState<AssistantChatMessage[]>(() => [createCopilotWelcomeMessage()]);
   const [catalogOffers, setCatalogOffers] = useState<DealerOffer[]>([]);
@@ -667,17 +672,27 @@ export function ComparisonPage() {
   const [catalogPageSize, setCatalogPageSize] = useState(() => parsePositiveInt(initialUrlParams.get("catalogPageSize"), 20));
   const [catalogTotalPages, setCatalogTotalPages] = useState(1);
   const [loadingCatalog, setLoadingCatalog] = useState(false);
+  const [loadingCatalogRank, setLoadingCatalogRank] = useState(false);
+  const [catalogRankedOffers, setCatalogRankedOffers] = useState<RankedOffer[]>([]);
   const [catalogFilters, setCatalogFilters] = useState<OfferCatalogFilterOptions>({
     dealers: [],
     cities: [],
     states: [],
+    zipcodes: [],
     makes: [],
     models: [],
   });
 
-  const [catalogDealerId, setCatalogDealerId] = useState(initialUrlParams.get("catalogDealerId") ?? "");
+  const [catalogDealerNames, setCatalogDealerNames] = useState<string[]>(() => {
+    const raw = initialUrlParams.get("catalogDealers") ?? "";
+    return raw
+      .split(",")
+      .map((item) => item.trim())
+      .filter((item) => item.length > 0);
+  });
   const [catalogCity, setCatalogCity] = useState(initialUrlParams.get("catalogCity") ?? "");
   const [catalogState, setCatalogState] = useState(initialUrlParams.get("catalogState") ?? "");
+  const [catalogZip, setCatalogZip] = useState(initialUrlParams.get("catalogZip") ?? "");
   const [catalogMake, setCatalogMake] = useState(initialUrlParams.get("catalogMake") ?? "");
   const [catalogModel, setCatalogModel] = useState(initialUrlParams.get("catalogModel") ?? "");
   const [catalogMinOtd, setCatalogMinOtd] = useState(initialUrlParams.get("catalogMinOtd") ?? "");
@@ -711,6 +726,20 @@ export function ComparisonPage() {
   const allResultOffers = useMemo(() => {
     return [...offers, ...rankedOffers.map((item) => item.offer)];
   }, [offers, rankedOffers]);
+
+  const catalogGeoCoverage = useMemo(() => {
+    const total = catalogOffers.length;
+    if (total === 0) {
+      return null;
+    }
+
+    const hasText = (value?: string | null) => typeof value === "string" && value.trim().length > 0;
+    const city = catalogOffers.filter((offer) => hasText(offer.dealer_city)).length;
+    const state = catalogOffers.filter((offer) => hasText(offer.dealer_state)).length;
+    const zip = catalogOffers.filter((offer) => hasText(offer.dealer_zipcode)).length;
+
+    return { total, city, state, zip };
+  }, [catalogOffers]);
 
   const resultDealerOptions = useMemo(() => {
     const names = allResultOffers
@@ -792,6 +821,12 @@ export function ComparisonPage() {
   }, [alertsPage, alertsTotalPages]);
 
   useEffect(() => {
+    if (catalogPage > catalogTotalPages) {
+      setCatalogPage(catalogTotalPages);
+    }
+  }, [catalogPage, catalogTotalPages]);
+
+  useEffect(() => {
     if (resultDealerFilter !== "all" && !resultDealerOptions.includes(resultDealerFilter)) {
       setResultDealerFilter("all");
     }
@@ -815,9 +850,10 @@ export function ComparisonPage() {
     params.set("savedSearchesCollapsed", savedSearchesCollapsed ? "1" : "0");
     params.set("catalogPage", String(catalogPage));
     params.set("catalogPageSize", String(catalogPageSize));
-    params.set("catalogDealerId", catalogDealerId);
+    params.set("catalogDealers", catalogDealerNames.join(","));
     params.set("catalogCity", catalogCity);
     params.set("catalogState", catalogState);
+    params.set("catalogZip", catalogZip);
     params.set("catalogMake", catalogMake);
     params.set("catalogModel", catalogModel);
     params.set("catalogMinOtd", catalogMinOtd);
@@ -837,7 +873,13 @@ export function ComparisonPage() {
     } else if (workspaceView === "sessions") {
       void fetchNegotiations();
     } else if (workspaceView === "inventory") {
-      void fetchCatalogOffers();
+      const inventoryFetchTimer = window.setTimeout(() => {
+        void fetchCatalogOffers();
+      }, 250);
+
+      return () => {
+        window.clearTimeout(inventoryFetchTimer);
+      };
     }
   }, [
     workspaceView,
@@ -850,9 +892,10 @@ export function ComparisonPage() {
     savedSearchesCollapsed,
     catalogPage,
     catalogPageSize,
-    catalogDealerId,
+    catalogDealerNames,
     catalogCity,
     catalogState,
+    catalogZip,
     catalogMake,
     catalogModel,
     catalogMinOtd,
@@ -1123,6 +1166,7 @@ export function ComparisonPage() {
   }
 
   async function fetchCatalogOffers() {
+    const requestSeq = ++catalogRequestSeqRef.current;
     setLoadingCatalog(true);
     try {
       const params = new URLSearchParams({
@@ -1130,9 +1174,10 @@ export function ComparisonPage() {
         page_size: String(catalogPageSize),
       });
 
-      if (catalogDealerId.trim()) params.set("dealer_id", catalogDealerId.trim());
+      if (catalogDealerNames.length > 0) params.set("dealer_names", catalogDealerNames.join(","));
       if (catalogCity.trim()) params.set("city", catalogCity.trim());
       if (catalogState.trim()) params.set("state", catalogState.trim());
+      if (catalogZip.trim()) params.set("zipcode", catalogZip.trim());
       if (catalogMake.trim()) params.set("make", catalogMake.trim());
       if (catalogModel.trim()) params.set("model", catalogModel.trim());
       if (catalogMinOtd.trim()) params.set("min_otd", catalogMinOtd.trim());
@@ -1146,14 +1191,23 @@ export function ComparisonPage() {
       }
 
       const data = await parseJsonResponse<OfferCatalogResponse>(response, "Load inventory catalog failed");
+      if (requestSeq !== catalogRequestSeqRef.current) {
+        return;
+      }
       setCatalogOffers(data.offers ?? []);
+      setCatalogRankedOffers([]);
       setCatalogTotal(Number(data.total ?? 0));
       setCatalogTotalPages(Number(data.total_pages ?? 1));
+      setCatalogPage((prev) => {
+        const safePage = Number(data.page ?? 1);
+        return prev === safePage ? prev : safePage;
+      });
       setCatalogFilters(
         data.filters ?? {
           dealers: [],
           cities: [],
           states: [],
+          zipcodes: [],
           makes: [],
           models: [],
         },
@@ -1161,7 +1215,9 @@ export function ComparisonPage() {
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to load inventory catalog");
     } finally {
-      setLoadingCatalog(false);
+      if (requestSeq === catalogRequestSeqRef.current) {
+        setLoadingCatalog(false);
+      }
     }
   }
 
@@ -1357,16 +1413,38 @@ export function ComparisonPage() {
     void submitCopilotMessage(chatInput);
   }
   function resetCatalogFilters() {
-    setCatalogDealerId("");
+    setCatalogDealerNames([]);
     setCatalogCity("");
     setCatalogState("");
+    setCatalogZip("");
     setCatalogMake("");
     setCatalogModel("");
     setCatalogMinOtd("");
     setCatalogMaxOtd("");
     setCatalogMinDom("");
     setCatalogMaxDom("");
+    setCatalogRankedOffers([]);
     setCatalogPage(1);
+  }
+
+  async function rankCatalogCurrentOffers() {
+    if (catalogOffers.length === 0) {
+      setError("Load inventory offers first, then rank the shortlist.");
+      return;
+    }
+
+    setLoadingCatalogRank(true);
+    setError(null);
+
+    try {
+      const ranked = await rankOfferList(catalogOffers);
+      setCatalogRankedOffers(ranked);
+    } catch (err) {
+      setCatalogRankedOffers([]);
+      setError(err instanceof Error ? err.message : "Failed to rank inventory offers");
+    } finally {
+      setLoadingCatalogRank(false);
+    }
   }
 
   function getOfferPlaybook(offerId: string): PlaybookKey {
@@ -1801,10 +1879,20 @@ export function ComparisonPage() {
   }
 
   async function rankOfferList(offersToRank: DealerOffer[]): Promise<RankedOffer[]> {
+    if (offersToRank.length === 0) {
+      return [];
+    }
+
+    const validBudget = Number.isFinite(budgetOtd) && budgetOtd > 0;
+    const fallbackBudget =
+      offersToRank.reduce((sum, offer) => sum + (Number.isFinite(offer.otd_price) ? offer.otd_price : 0), 0) /
+      offersToRank.length;
+    const effectiveBudget = validBudget ? budgetOtd : Math.max(1, Math.round(fallbackBudget));
+
     const response = await fetch(`${apiBase}/offers/rank`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ budget_otd: budgetOtd, offers: offersToRank }),
+      body: JSON.stringify({ budget_otd: effectiveBudget, offers: offersToRank }),
     });
 
     if (!response.ok) {
@@ -2798,8 +2886,21 @@ export function ComparisonPage() {
             <h2>Inventory Explorer (Database)</h2>
             <div className="panel-head-actions">
               <span className="pill">{catalogOffers.length} shown / {catalogTotal} total</span>
+              {catalogGeoCoverage && (
+                <span className="pill">
+                  Geo (shown) C {catalogGeoCoverage.city}/{catalogGeoCoverage.total} | S {catalogGeoCoverage.state}/{catalogGeoCoverage.total} | Z {catalogGeoCoverage.zip}/{catalogGeoCoverage.total}
+                </span>
+              )}
               <button className="btn" type="button" onClick={() => void fetchCatalogOffers()} disabled={loadingCatalog}>
                 {loadingCatalog ? "Refreshing..." : "Refresh"}
+              </button>
+              <button
+                className="btn"
+                type="button"
+                onClick={() => void rankCatalogCurrentOffers()}
+                disabled={loadingCatalog || loadingCatalogRank || catalogOffers.length === 0}
+              >
+                {loadingCatalogRank ? "Ranking..." : "Rank Shortlist"}
               </button>
               <button className="btn" type="button" onClick={resetCatalogFilters}>
                 Reset Filters
@@ -2809,17 +2910,18 @@ export function ComparisonPage() {
 
           <div className="form-grid">
             <label>
-              Dealer
+              Dealer (Multi-select)
               <select
-                value={catalogDealerId}
+                multiple
+                value={catalogDealerNames}
                 onChange={(e) => {
-                  setCatalogDealerId(e.target.value);
+                  const values = Array.from(e.target.selectedOptions).map((option) => option.value);
+                  setCatalogDealerNames(values);
                   setCatalogPage(1);
                 }}
               >
-                <option value="">All Dealers</option>
                 {catalogFilters.dealers.map((dealer) => (
-                  <option key={dealer.id} value={dealer.id}>
+                  <option key={dealer.id} value={dealer.name}>
                     {dealer.name}
                   </option>
                 ))}
@@ -2827,71 +2929,88 @@ export function ComparisonPage() {
             </label>
             <label>
               City
-              <select
+              <input
+                list="catalog-city-options"
                 value={catalogCity}
                 onChange={(e) => {
                   setCatalogCity(e.target.value);
                   setCatalogPage(1);
                 }}
-              >
-                <option value="">All Cities</option>
+                placeholder="All Cities"
+              />
+              <datalist id="catalog-city-options">
                 {catalogFilters.cities.map((value) => (
-                  <option key={value} value={value}>
-                    {value}
-                  </option>
+                  <option key={value} value={value} />
                 ))}
-              </select>
+              </datalist>
             </label>
             <label>
               State
-              <select
+              <input
+                list="catalog-state-options"
                 value={catalogState}
                 onChange={(e) => {
                   setCatalogState(e.target.value);
                   setCatalogPage(1);
                 }}
-              >
-                <option value="">All States</option>
+                placeholder="All States"
+              />
+              <datalist id="catalog-state-options">
                 {catalogFilters.states.map((value) => (
-                  <option key={value} value={value}>
-                    {value}
-                  </option>
+                  <option key={value} value={value} />
                 ))}
-              </select>
+              </datalist>
+            </label>
+            <label>
+              Zipcode
+              <input
+                list="catalog-zip-options"
+                value={catalogZip}
+                onChange={(e) => {
+                  setCatalogZip(e.target.value);
+                  setCatalogPage(1);
+                }}
+                placeholder="All Zipcodes"
+              />
+              <datalist id="catalog-zip-options">
+                {catalogFilters.zipcodes.map((value) => (
+                  <option key={value} value={value} />
+                ))}
+              </datalist>
             </label>
             <label>
               Make
-              <select
+              <input
+                list="catalog-make-options"
                 value={catalogMake}
                 onChange={(e) => {
                   setCatalogMake(e.target.value);
                   setCatalogPage(1);
                 }}
-              >
-                <option value="">All Makes</option>
+                placeholder="All Makes"
+              />
+              <datalist id="catalog-make-options">
                 {catalogFilters.makes.map((value) => (
-                  <option key={value} value={value}>
-                    {value}
-                  </option>
+                  <option key={value} value={value} />
                 ))}
-              </select>
+              </datalist>
             </label>
             <label>
               Model
-              <select
+              <input
+                list="catalog-model-options"
                 value={catalogModel}
                 onChange={(e) => {
                   setCatalogModel(e.target.value);
                   setCatalogPage(1);
                 }}
-              >
-                <option value="">All Models</option>
+                placeholder="All Models"
+              />
+              <datalist id="catalog-model-options">
                 {catalogFilters.models.map((value) => (
-                  <option key={value} value={value}>
-                    {value}
-                  </option>
+                  <option key={value} value={value} />
                 ))}
-              </select>
+              </datalist>
             </label>
             <label>
               Min OTD
@@ -2978,20 +3097,20 @@ export function ComparisonPage() {
                     <div className="stats">
                       <span>Dealer {offer.dealership_id}</span>
                       {offer.vin && <span>VIN {offer.vin}</span>}
-                      {offer.msrp !== undefined && <span>MSRP ${offer.msrp.toLocaleString()}</span>}
-                      {offer.advertised_price !== undefined && <span>Adv ${offer.advertised_price.toLocaleString()}</span>}
-                      {offer.selling_price !== undefined && <span>Selling ${offer.selling_price.toLocaleString()}</span>}
-                      {offer.dealer_discount !== undefined && offer.dealer_discount > 0 && <span>Discount ${offer.dealer_discount.toLocaleString()}</span>}
-                      {offer.listed_price !== undefined && <span>List ${offer.listed_price.toLocaleString()}</span>}
+                      {offer.msrp != null && <span>MSRP ${offer.msrp.toLocaleString()}</span>}
+                      {offer.advertised_price != null && <span>Adv ${offer.advertised_price.toLocaleString()}</span>}
+                      {offer.selling_price != null && <span>Selling ${offer.selling_price.toLocaleString()}</span>}
+                      {offer.dealer_discount != null && offer.dealer_discount > 0 && <span>Discount ${offer.dealer_discount.toLocaleString()}</span>}
+                      {offer.listed_price != null && <span>List ${offer.listed_price.toLocaleString()}</span>}
                       <span>{offer.distance_miles} mi</span>
                       <span>Fees ${offer.fees.toLocaleString()}</span>
                       <span>Adj. ${offer.market_adjustment.toLocaleString()}</span>
-                      {offer.days_on_market !== undefined && <span>DOM {offer.days_on_market}d</span>}
+                      {offer.days_on_market != null && <span>DOM {offer.days_on_market}d</span>}
                       {offer.days_on_market_bucket && <span>DOM Bucket {offer.days_on_market_bucket}</span>}
-                      {offer.price_drop_7d !== undefined && offer.price_drop_7d > 0 && (
+                      {offer.price_drop_7d != null && offer.price_drop_7d > 0 && (
                         <span>Drop 7d ${offer.price_drop_7d.toLocaleString()}</span>
                       )}
-                      {offer.price_drop_30d !== undefined && offer.price_drop_30d > 0 && (
+                      {offer.price_drop_30d != null && offer.price_drop_30d > 0 && (
                         <span>Drop 30d ${offer.price_drop_30d.toLocaleString()}</span>
                       )}
                     </div>
@@ -3016,6 +3135,37 @@ export function ComparisonPage() {
                 );
               })}
             </div>
+          )}
+
+          {catalogRankedOffers.length > 0 && (
+            <>
+              <div className="panel-header">
+                <h3>Inventory Ranked Shortlist</h3>
+                <span className="pill">{catalogRankedOffers.length} ranked</span>
+              </div>
+              <div className="offer-list list-offset">
+                {catalogRankedOffers.map((item) => (
+                  <div className={`rank-card${item.rank === 1 ? " best" : ""}`} key={`catalog-rank-${item.offer.offer_id}-${item.rank}`}>
+                    <div className="rank-row">
+                      <span className="rank">#{item.rank}</span>
+                      <strong>{item.offer.dealership_name}</strong>
+                      <span className="score">Score {item.score}</span>
+                    </div>
+                    <p>{item.offer.vehicle_label}</p>
+                    <div className="stats">
+                      <span>OTD ${item.offer.otd_price.toLocaleString()}</span>
+                      {item.offer.days_on_market !== undefined && <span>DOM {item.offer.days_on_market}d</span>}
+                      {item.offer.price_drop_30d !== undefined && item.offer.price_drop_30d > 0 && (
+                        <span>Drop 30d ${item.offer.price_drop_30d.toLocaleString()}</span>
+                      )}
+                      <span>Price {item.score_breakdown.price_score ?? 0}</span>
+                      <span>Specs {item.score_breakdown.specs_score ?? 0}</span>
+                      <span>Fees {item.score_breakdown.fee_score ?? 0}</span>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </>
           )}
 
           {catalogTotal > 0 && (
@@ -3150,11 +3300,11 @@ export function ComparisonPage() {
                     <p>{offer.dealership_name}</p>
                     <div className="stats">
                       {offer.vin && <span>VIN {offer.vin}</span>}
-                      {offer.msrp !== undefined && <span>MSRP ${offer.msrp.toLocaleString()}</span>}
-                      {offer.advertised_price !== undefined && <span>Adv ${offer.advertised_price.toLocaleString()}</span>}
-                      {offer.selling_price !== undefined && <span>Selling ${offer.selling_price.toLocaleString()}</span>}
-                      {offer.dealer_discount !== undefined && offer.dealer_discount > 0 && <span>Discount ${offer.dealer_discount.toLocaleString()}</span>}
-                      {offer.listed_price !== undefined && <span>List ${offer.listed_price.toLocaleString()}</span>}
+                      {offer.msrp != null && <span>MSRP ${offer.msrp.toLocaleString()}</span>}
+                      {offer.advertised_price != null && <span>Adv ${offer.advertised_price.toLocaleString()}</span>}
+                      {offer.selling_price != null && <span>Selling ${offer.selling_price.toLocaleString()}</span>}
+                      {offer.dealer_discount != null && offer.dealer_discount > 0 && <span>Discount ${offer.dealer_discount.toLocaleString()}</span>}
+                      {offer.listed_price != null && <span>List ${offer.listed_price.toLocaleString()}</span>}
                       <span>{offer.distance_miles} mi</span>
                       <span>Fees ${offer.fees.toLocaleString()}</span>
                       <span>Adj. ${offer.market_adjustment.toLocaleString()}</span>
@@ -3165,10 +3315,10 @@ export function ComparisonPage() {
                         </span>
                       )}
                       {offer.days_on_market_bucket && <span>DOM Bucket {offer.days_on_market_bucket}</span>}
-                      {offer.price_drop_7d !== undefined && offer.price_drop_7d > 0 && (
+                      {offer.price_drop_7d != null && offer.price_drop_7d > 0 && (
                         <span>Drop 7d ${offer.price_drop_7d.toLocaleString()}</span>
                       )}
-                      {offer.price_drop_30d !== undefined && offer.price_drop_30d > 0 && (
+                      {offer.price_drop_30d != null && offer.price_drop_30d > 0 && (
                         <span>Drop 30d ${offer.price_drop_30d.toLocaleString()}</span>
                       )}
                       {offer.inventory_status && <span>Status {offer.inventory_status}</span>}
@@ -3508,6 +3658,12 @@ export function ComparisonPage() {
     </main>
   );
 }
+
+
+
+
+
+
 
 
 

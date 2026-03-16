@@ -91,9 +91,21 @@ function readPolicy(value: unknown): PlaybookPolicy | null {
   return value as PlaybookPolicy;
 }
 
+function eventIsInbound(eventType: string, payload: Record<string, unknown>): boolean {
+  const direction = String(payload.direction || "").toLowerCase();
+  return eventType === "negotiation.message.received" || eventType === "history.inbound" || direction === "inbound";
+}
+
+function eventIsOutbound(eventType: string, payload: Record<string, unknown>): boolean {
+  const direction = String(payload.direction || "").toLowerCase();
+  return eventType === "negotiation.message.sent" || eventType === "history.outbound" || direction === "outbound";
+}
+
 export function WarRoomPage({ sessionId, returnTo }: WarRoomPageProps) {
   const [events, setEvents] = useState<WarRoomEvent[]>([]);
   const [connected, setConnected] = useState(false);
+  const [connecting, setConnecting] = useState(false);
+  const [feedError, setFeedError] = useState<string | null>(null);
   const [loadingHistory, setLoadingHistory] = useState(false);
   const [historyError, setHistoryError] = useState<string | null>(null);
   const [sessionStatus, setSessionStatus] = useState<string | null>(null);
@@ -113,7 +125,12 @@ export function WarRoomPage({ sessionId, returnTo }: WarRoomPageProps) {
     }
 
     const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
-    return `${protocol}//${window.location.host}/ws/negotiations/${sessionId}`;
+    const host = window.location.hostname;
+    const localHosts = new Set(["localhost", "127.0.0.1", "0.0.0.0"]);
+    if (localHosts.has(host)) {
+      return protocol + "//" + host + ":8020/ws/negotiations/" + sessionId;
+    }
+    return protocol + "//" + window.location.host + "/ws/negotiations/" + sessionId;
   }, [sessionId]);
 
   const inboundCount = useMemo(
@@ -253,6 +270,11 @@ export function WarRoomPage({ sessionId, returnTo }: WarRoomPageProps) {
     setActionStatus(null);
 
     try {
+      if (!sessionDetail?.autopilot_enabled) {
+        setActionStatus("Autopilot is already paused.");
+        return;
+      }
+
       const response = await fetch(`${apiBase}/negotiations/${sessionId}/autopilot`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
@@ -272,16 +294,33 @@ export function WarRoomPage({ sessionId, returnTo }: WarRoomPageProps) {
   }
 
   function connect() {
-    if (socketRef.current && socketRef.current.readyState === WebSocket.OPEN) {
+    if (
+      socketRef.current &&
+      (socketRef.current.readyState === WebSocket.OPEN || socketRef.current.readyState === WebSocket.CONNECTING)
+    ) {
       return;
     }
 
+    setFeedError(null);
+    setConnecting(true);
     const socket = new WebSocket(wsUrl);
     socketRef.current = socket;
 
-    socket.onopen = () => setConnected(true);
+    socket.onopen = () => {
+      setConnected(true);
+      setConnecting(false);
+      setFeedError(null);
+    };
+    socket.onerror = () => {
+      setConnected(false);
+      setConnecting(false);
+      setFeedError(
+        "Live feed connection failed. Verify war-room realtime service is running and reachable at " + wsUrl + ".",
+      );
+    };
     socket.onclose = () => {
       setConnected(false);
+      setConnecting(false);
       if (socketRef.current === socket) {
         socketRef.current = null;
       }
@@ -319,7 +358,7 @@ export function WarRoomPage({ sessionId, returnTo }: WarRoomPageProps) {
             Back To Workspace
           </a>
           <button onClick={connect} className="btn primary" type="button">
-            {connected ? "Connected" : "Connect Feed"}
+            {connected ? "Connected" : connecting ? "Connecting..." : "Connect Feed"}
           </button>
           <button onClick={() => void loadHistory()} className="btn" type="button" disabled={loadingHistory}>
             {loadingHistory ? "Loading History..." : "Reload History"}
@@ -356,7 +395,7 @@ export function WarRoomPage({ sessionId, returnTo }: WarRoomPageProps) {
             className="btn"
             type="button"
             onClick={() => void pauseAutopilot()}
-            disabled={actionLoading === "autopilot" || !sessionDetail?.autopilot_enabled}
+            disabled={actionLoading === "autopilot"}
           >
             {actionLoading === "autopilot" ? "Pausing..." : "Pause Autopilot"}
           </button>
@@ -365,6 +404,7 @@ export function WarRoomPage({ sessionId, returnTo }: WarRoomPageProps) {
         {queueError && <p className="error">{queueError}</p>}
         {actionStatus && <p className="success">{actionStatus}</p>}
         {actionError && <p className="error">{actionError}</p>}
+        {feedError && <p className="error">{feedError}</p>}
       </section>
 
       {historyError && <p className="error">{historyError}</p>}
@@ -375,17 +415,32 @@ export function WarRoomPage({ sessionId, returnTo }: WarRoomPageProps) {
         ) : (
           <div className="warroom-feed">
             {events.map((event, index) => {
-              const payload = event.payload ?? {};
+              const payload: Record<string, unknown> = event.payload ?? {};
               const nextPolicy = readPolicy(payload.playbook_policy);
               const prevPolicy = readPolicy(payload.previous_playbook_policy);
-              const metadata = readPolicy((payload as Record<string, unknown>).metadata);
+              const eventType = event.event_type || "";
+              const inbound = eventIsInbound(eventType, payload);
+              const outbound = eventIsOutbound(eventType, payload);
+              const bodyText = typeof payload.body === "string" ? payload.body : JSON.stringify(payload, null, 2);
+              const senderLabel =
+                typeof payload.sender_identity === "string" && payload.sender_identity
+                  ? payload.sender_identity
+                  : typeof payload.sender === "string" && payload.sender
+                    ? payload.sender
+                    : inbound
+                      ? "Dealer"
+                      : outbound
+                        ? "AI Assistant"
+                        : eventTitle(event);
+
               return (
-                <article className="warroom-event-card" key={`${event.event_type}-${index}`}>
+                <article className={`warroom-event-card ${inbound ? "chat-inbound" : outbound ? "chat-outbound" : "chat-system"}`} key={`${event.event_type}-${index}`}>
                   <div className="warroom-event-head">
-                    <strong>{eventTitle(event)}</strong>
+                    <strong>{senderLabel}</strong>
                     <span>{formatEventTime(event.timestamp)}</span>
                   </div>
-                  {event.event_type === "negotiation.playbook.updated" && (
+                  {(inbound || outbound) && <p className="warroom-chat-body">{bodyText}</p>}
+                  {!(inbound || outbound) && event.event_type === "negotiation.playbook.updated" && (
                     <div className="warroom-event-inline">
                       <span className="pill">Before {(payload.previous_playbook as string) || "n/a"}</span>
                       <span className="pill">After {(payload.playbook as string) || "n/a"}</span>
@@ -397,7 +452,7 @@ export function WarRoomPage({ sessionId, returnTo }: WarRoomPageProps) {
                       )}
                     </div>
                   )}
-                  {event.event_type === "negotiation.status.updated" && (
+                  {!(inbound || outbound) && event.event_type === "negotiation.status.updated" && (
                     <div className="warroom-event-inline">
                       <span className="pill">From {(payload.previous_status as string) || "n/a"}</span>
                       <span className="pill">To {(payload.status as string) || "n/a"}</span>
@@ -405,13 +460,13 @@ export function WarRoomPage({ sessionId, returnTo }: WarRoomPageProps) {
                       <span className="pill">Actor {(payload.actor as string) || "operator"}</span>
                     </div>
                   )}
-                  {(event.event_type === "negotiation.message.sent" || event.event_type === "history.outbound") && (
+                  {(inbound || outbound) && (
                     <div className="warroom-event-inline">
-                      <span className="pill">Playbook {(payload.playbook as string) || metadata?.playbook || "n/a"}</span>
-                      <span className="pill">Tone {(metadata?.tone as string) || ((metadata?.playbook_policy as PlaybookPolicy | undefined)?.tone ?? "n/a")}</span>
+                      <span className="pill">{eventTitle(event)}</span>
+                      {typeof payload.channel === "string" && <span className="pill">{String(payload.channel).toUpperCase()}</span>}
                     </div>
                   )}
-                  <pre className="warroom-payload">{JSON.stringify(payload, null, 2)}</pre>
+                  {!(inbound || outbound) && <pre className="warroom-payload">{JSON.stringify(payload, null, 2)}</pre>}
                 </article>
               );
             })}
@@ -421,3 +476,4 @@ export function WarRoomPage({ sessionId, returnTo }: WarRoomPageProps) {
     </main>
   );
 }
+

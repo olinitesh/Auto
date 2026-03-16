@@ -697,6 +697,34 @@ select:focus {
   padding: 11px;
 }
 
+.warroom-event-card.chat-inbound,
+.warroom-event-card.chat-outbound {
+  max-width: min(78%, 760px);
+}
+
+.warroom-event-card.chat-inbound {
+  justify-self: start;
+  border-color: rgba(125, 186, 245, 0.38);
+  background: linear-gradient(120deg, rgba(9, 31, 52, 0.9), rgba(8, 27, 44, 0.84));
+}
+
+.warroom-event-card.chat-outbound {
+  justify-self: end;
+  border-color: rgba(52, 211, 153, 0.42);
+  background: linear-gradient(120deg, rgba(10, 47, 45, 0.9), rgba(8, 35, 36, 0.84));
+}
+
+.warroom-event-card.chat-system {
+  max-width: 100%;
+}
+
+.warroom-chat-body {
+  margin: 0 0 8px;
+  color: #e6f3ff;
+  line-height: 1.5;
+  white-space: pre-wrap;
+}
+
 .warroom-event-head {
   display: flex;
   justify-content: space-between;

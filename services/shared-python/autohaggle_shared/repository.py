@@ -1,6 +1,6 @@
 from datetime import datetime, timedelta
 
-from sqlalchemy import and_, asc, desc, func, select
+from sqlalchemy import and_, asc, desc, func, or_, select
 from sqlalchemy.orm import Session
 
 from autohaggle_shared.models import Dealer, NegotiationMessage, NegotiationSession, OfferObservation, OfferPriceHistory, SavedSearch, SavedSearchAlert
@@ -618,8 +618,10 @@ def list_offer_catalog(
     *,
     dealer_id: str | None = None,
     dealer_name: str | None = None,
+    dealer_names: list[str] | None = None,
     city: str | None = None,
     state: str | None = None,
+    zipcode: str | None = None,
     make: str | None = None,
     model: str | None = None,
     min_otd: float | None = None,
@@ -629,6 +631,19 @@ def list_offer_catalog(
     page: int = 1,
     page_size: int = 50,
 ) -> tuple[list[DealerOffer], int, OfferCatalogFilterOptions]:
+    def _payload_text(payload: dict, keys: list[str]) -> str | None:
+        for key in keys:
+            value = str(payload.get(key) or "").strip()
+            if value:
+                return value
+        return None
+
+    def _geo_fields(payload: dict, dealer: Dealer) -> tuple[str | None, str | None, str | None]:
+        city_value = (str(dealer.city or "").strip() or _payload_text(payload, ["dealer_city", "city", "dealership_city"]))
+        state_value = (str(dealer.state or "").strip() or _payload_text(payload, ["dealer_state", "state", "dealership_state"]))
+        zip_value = _payload_text(payload, ["dealer_zip", "zip", "zipcode", "postal_code", "dealer_postal_code"])
+        return city_value, state_value, zip_value
+
     safe_page = max(1, page)
     safe_page_size = max(1, min(page_size, 200))
 
@@ -639,10 +654,10 @@ def list_offer_catalog(
         conditions.append(OfferObservation.dealership_id == dealer_id.strip())
     if dealer_name:
         conditions.append(Dealer.name.ilike(f"%{dealer_name.strip()}%"))
-    if city:
-        conditions.append(Dealer.city.ilike(f"%{city.strip()}%"))
-    if state:
-        conditions.append(Dealer.state.ilike(f"%{state.strip()}%"))
+    if dealer_names:
+        clean_names = [name.strip() for name in dealer_names if str(name).strip()]
+        if clean_names:
+            conditions.append(or_(*[func.lower(Dealer.name) == name.lower() for name in clean_names]))
     if make:
         conditions.append(OfferObservation.make.ilike(f"%{make.strip()}%"))
     if model:
@@ -655,32 +670,34 @@ def list_offer_catalog(
     if conditions:
         base_stmt = base_stmt.where(and_(*conditions))
 
-    total = int(
-        db.execute(
-            select(func.count())
-            .select_from(OfferObservation)
-            .join(Dealer, Dealer.id == OfferObservation.dealership_id)
-            .where(and_(*conditions))
-            if conditions
-            else select(func.count()).select_from(OfferObservation)
-        ).scalar_one()
-    )
+    rows = db.execute(base_stmt.order_by(desc(OfferObservation.last_seen_at))).all()
 
-    total_pages = max(1, (total + safe_page_size - 1) // safe_page_size)
-    safe_page = min(safe_page, total_pages)
-
-    rows = (
-        db.execute(
-            base_stmt.order_by(desc(OfferObservation.last_seen_at))
-            .offset((safe_page - 1) * safe_page_size)
-            .limit(safe_page_size)
-        )
-        .all()
-    )
+    city_filter = (city or "").strip().lower()
+    state_filter = (state or "").strip().lower()
+    zip_filter = (zipcode or "").strip().lower()
 
     offers: list[DealerOffer] = []
+    city_values: set[str] = set()
+    state_values: set[str] = set()
+    zip_values: set[str] = set()
+
     for observation, dealer in rows:
         payload = observation.last_payload if isinstance(observation.last_payload, dict) else {}
+        city_value, state_value, zip_value = _geo_fields(payload, dealer)
+
+        if city_value:
+            city_values.add(city_value)
+        if state_value:
+            state_values.add(state_value)
+        if zip_value:
+            zip_values.add(zip_value)
+
+        if city_filter and (not city_value or city_filter != city_value.strip().lower()):
+            continue
+        if state_filter and (not state_value or state_filter != state_value.strip().lower()):
+            continue
+        if zip_filter and (not zip_value or not zip_value.strip().lower().startswith(zip_filter)):
+            continue
 
         first_seen = observation.first_seen_at
         last_seen = observation.last_seen_at
@@ -710,6 +727,9 @@ def list_offer_catalog(
             offer_id=offer_id,
             dealership_id=observation.dealership_id,
             dealership_name=dealer.name,
+            dealer_city=city_value,
+            dealer_state=state_value,
+            dealer_zipcode=zip_value,
             distance_miles=float(payload.get("distance_miles") or dealer.distance_miles or 0.0),
             vehicle_id=observation.vehicle_key,
             vehicle_label=vehicle_label,
@@ -740,21 +760,30 @@ def list_offer_catalog(
         )
         offers.append(offer)
 
+    total = len(offers)
+    total_pages = max(1, (total + safe_page_size - 1) // safe_page_size)
+    safe_page = min(safe_page, total_pages)
+    start = (safe_page - 1) * safe_page_size
+    end = start + safe_page_size
+    paged_offers = offers[start:end]
+
     dealer_rows = db.execute(select(Dealer.id, Dealer.name).order_by(asc(Dealer.name)).limit(500)).all()
-    city_rows = db.execute(select(Dealer.city).where(Dealer.city.is_not(None)).distinct().order_by(asc(Dealer.city)).limit(500)).all()
-    state_rows = db.execute(select(Dealer.state).where(Dealer.state.is_not(None)).distinct().order_by(asc(Dealer.state)).limit(100)).all()
     make_rows = db.execute(select(OfferObservation.make).where(OfferObservation.make.is_not(None)).distinct().order_by(asc(OfferObservation.make)).limit(200)).all()
     model_rows = db.execute(select(OfferObservation.model).where(OfferObservation.model.is_not(None)).distinct().order_by(asc(OfferObservation.model)).limit(400)).all()
 
     filters = OfferCatalogFilterOptions(
         dealers=[DealerFilterOption(id=row[0], name=row[1]) for row in dealer_rows if row[0] and row[1]],
-        cities=[str(row[0]) for row in city_rows if row[0]],
-        states=[str(row[0]) for row in state_rows if row[0]],
+        cities=sorted(city_values),
+        states=sorted(state_values),
+        zipcodes=sorted(zip_values),
         makes=[str(row[0]) for row in make_rows if row[0]],
         models=[str(row[0]) for row in model_rows if row[0]],
     )
 
-    return offers, total, filters
+    return paged_offers, total, filters
+
+
+
 
 
 
