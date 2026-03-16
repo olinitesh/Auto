@@ -1324,3 +1324,9 @@ select:focus {
   margin-bottom: 8px;
 }
 
+
+.search-actions-row {
+  flex-wrap: nowrap;
+  overflow-x: auto;
+}
+

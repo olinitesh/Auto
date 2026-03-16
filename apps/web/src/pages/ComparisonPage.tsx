@@ -2128,40 +2128,38 @@ export function ComparisonPage() {
     const response = historyByKey[key];
     const fetchError = historyErrorByKey[key];
 
+    if (!expanded) {
+      return null;
+    }
+
     return (
       <div className="history-wrap">
-        <button className="btn" type="button" onClick={() => void toggleOfferHistory(offer)}>
-          {expanded ? "Hide Price History" : "View Price History"}
-        </button>
-
-        {expanded && (
-          <div className="history-panel">
-            {loading && <p className="empty">Loading history...</p>}
-            {!loading && fetchError && <p className="error">{fetchError}</p>}
-            {!loading && !fetchError && response && (
-              <>
-                <div className="stats history-meta">
-                  <span>First Seen: {formatSeenAt(response.first_seen_at)}</span>
-                  <span>Last Seen: {formatSeenAt(response.last_seen_at)}</span>
-                  {response.days_on_market !== undefined && <span>Tracked DOM: {response.days_on_market}d</span>}
-                </div>
-                {response.points.length === 0 ? (
-                  <p className="empty">No historical snapshots yet.</p>
-                ) : (
-                  <ul className="history-list">
-                    {response.points.map((point, idx) => (
-                      <li key={`${key}-${idx}`}>
-                        <span>{formatSeenAt(point.seen_at)}</span>
-                        <span>${point.otd_price.toLocaleString()}</span>
-                        <span>{point.data_provider ?? "n/a"}</span>
-                      </li>
-                    ))}
-                  </ul>
-                )}
-              </>
-            )}
-          </div>
-        )}
+        <div className="history-panel">
+          {loading && <p className="empty">Loading history...</p>}
+          {!loading && fetchError && <p className="error">{fetchError}</p>}
+          {!loading && !fetchError && response && (
+            <>
+              <div className="stats history-meta">
+                <span>First Seen: {formatSeenAt(response.first_seen_at)}</span>
+                <span>Last Seen: {formatSeenAt(response.last_seen_at)}</span>
+                {response.days_on_market !== undefined && <span>Tracked DOM: {response.days_on_market}d</span>}
+              </div>
+              {response.points.length === 0 ? (
+                <p className="empty">No historical snapshots yet.</p>
+              ) : (
+                <ul className="history-list">
+                  {response.points.map((point, idx) => (
+                    <li key={`${key}-${idx}`}>
+                      <span>{formatSeenAt(point.seen_at)}</span>
+                      <span>${point.otd_price.toLocaleString()}</span>
+                      <span>{point.data_provider ?? "n/a"}</span>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </>
+          )}
+        </div>
       </div>
     );
   }
@@ -2827,7 +2825,7 @@ export function ComparisonPage() {
                       />
                     </label>
                   </div>
-                  <div className="link-actions">
+                  <div className="link-actions search-actions-row">
                     <label className="playbook-picker" title="Session-level negotiation strategy. Updates future rounds for this session.">
                       Playbook
                       <select
@@ -3114,7 +3112,7 @@ export function ComparisonPage() {
                         <span>Drop 30d ${offer.price_drop_30d.toLocaleString()}</span>
                       )}
                     </div>
-                    <div className="link-actions">
+                    <div className="link-actions search-actions-row">
                       {offer.vin && (
                         <button className="btn" type="button" onClick={() => void copyVinToClipboard(offer.vin)}>
                           {copiedVin === offer.vin ? "Copied" : "Copy VIN"}
@@ -3342,7 +3340,7 @@ export function ComparisonPage() {
                       </div>
                     </div>
                     {renderTrendSparkline(offer)}
-                    <div className="link-actions">
+                    <div className="link-actions search-actions-row">
                       {offer.vin && (
                         <button className="btn" type="button" onClick={() => void copyVinToClipboard(offer.vin)}>
                           {copiedVin === offer.vin ? "Copied" : "Copy VIN"}
@@ -3358,6 +3356,9 @@ export function ComparisonPage() {
                           Dealer Site
                         </a>
                       )}
+                      <button className="btn" type="button" onClick={() => void toggleOfferHistory(offer)}>
+                        {expandedHistoryKeys[offerKey(offer)] === true ? "Hide Price History" : "View Price History"}
+                      </button>
                     </div>
                     {renderHistoryPanel(offer)}
                   </div>
@@ -3479,7 +3480,7 @@ export function ComparisonPage() {
                       </div>
                     </div>
                     {renderTrendSparkline(item.offer)}
-                    <div className="link-actions">
+                    <div className="link-actions search-actions-row">
                       {item.offer.vin && (
                         <button className="btn" type="button" onClick={() => void copyVinToClipboard(item.offer.vin)}>
                           {copiedVin === item.offer.vin ? "Copied" : "Copy VIN"}
@@ -3658,6 +3659,7 @@ export function ComparisonPage() {
     </main>
   );
 }
+
 
 
 
