@@ -39,6 +39,14 @@ def _to_bool(value: object) -> bool:
     return text in {"1", "true", "yes", "y", "on"}
 
 
+def _first_text(payload: dict, keys: list[str]) -> str | None:
+    for key in keys:
+        value = str(payload.get(key) or "").strip()
+        if value:
+            return value
+    return None
+
+
 class ListingParser:
     """Parses source-specific raw payload into a common ParsedListing shape."""
 
@@ -56,6 +64,7 @@ class ListingParser:
             make=str(p.get("make") or "").strip(),
             model=str(p.get("model") or "").strip(),
             trim=(str(p.get("trim")).strip() if p.get("trim") else None),
+            exterior_color=_first_text(p, ["exterior_color", "exteriorColor", "exterior_color_name", "ext_color", "color"]),
             listed_price=_to_float(p.get("listed_price")),
             msrp=_to_optional_float(p.get("msrp")),
             advertised_price=_to_optional_float(p.get("advertised_price") or p.get("advertized_price")),

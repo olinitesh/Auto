@@ -622,6 +622,7 @@ def list_offer_catalog(
     city: str | None = None,
     state: str | None = None,
     zipcode: str | None = None,
+    vin: str | None = None,
     make: str | None = None,
     model: str | None = None,
     min_otd: float | None = None,
@@ -658,6 +659,8 @@ def list_offer_catalog(
         clean_names = [name.strip() for name in dealer_names if str(name).strip()]
         if clean_names:
             conditions.append(or_(*[func.lower(Dealer.name) == name.lower() for name in clean_names]))
+    if vin:
+        conditions.append(OfferObservation.vin.ilike(f"%{vin.strip().upper()}%"))
     if make:
         conditions.append(OfferObservation.make.ilike(f"%{make.strip()}%"))
     if model:
@@ -733,6 +736,7 @@ def list_offer_catalog(
             distance_miles=float(payload.get("distance_miles") or dealer.distance_miles or 0.0),
             vehicle_id=observation.vehicle_key,
             vehicle_label=vehicle_label,
+            exterior_color=_payload_text(payload, ["exterior_color", "exteriorColor", "exterior_color_name", "ext_color", "color"]),
             otd_price=otd_price,
             listed_price=float(payload.get("listed_price") or 0.0) if payload.get("listed_price") is not None else None,
             msrp=float(payload.get("msrp") or 0.0) if payload.get("msrp") is not None else None,

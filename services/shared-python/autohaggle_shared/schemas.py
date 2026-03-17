@@ -46,6 +46,7 @@ class DealerOffer(BaseModel):
     distance_miles: float = Field(ge=0)
     vehicle_id: str
     vehicle_label: str
+    exterior_color: str | None = None
     otd_price: float = Field(gt=0)
     listed_price: float | None = Field(default=None, ge=0)
     msrp: float | None = Field(default=None, ge=0)

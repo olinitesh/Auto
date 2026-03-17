@@ -29,6 +29,7 @@ type DealerOffer = {
   distance_miles: number;
   vehicle_id: string;
   vehicle_label: string;
+  exterior_color?: string;
   otd_price: number;
   listed_price?: number;
   msrp?: number;
@@ -284,6 +285,7 @@ type PersistedSearchState = {
   expandedHistoryKeys: Record<string, boolean>;
   resultDealerFilter?: string;
   resultTrimFilter?: string;
+  resultVinFilter?: string;
   negotiationPlaybookByOfferId?: Record<string, PlaybookKey>;
 };
 
@@ -596,6 +598,7 @@ export function ComparisonPage() {
       setExpandedHistoryKeys(persisted.expandedHistoryKeys ?? {});
       setResultDealerFilter((persisted.resultDealerFilter ?? initialUrlParams.get("resultDealer") ?? "all") || "all");
       setResultTrimFilter((persisted.resultTrimFilter ?? initialUrlParams.get("resultTrim") ?? "all") || "all");
+      setResultVinFilter((persisted.resultVinFilter ?? initialUrlParams.get("resultVin") ?? "").trim());
       setNegotiationPlaybookByOfferId((persisted.negotiationPlaybookByOfferId ?? {}) as Record<string, PlaybookKey>);
     }
 
@@ -694,6 +697,7 @@ export function ComparisonPage() {
   const [catalogCity, setCatalogCity] = useState(initialUrlParams.get("catalogCity") ?? "");
   const [catalogState, setCatalogState] = useState(initialUrlParams.get("catalogState") ?? "");
   const [catalogZip, setCatalogZip] = useState(initialUrlParams.get("catalogZip") ?? "");
+  const [catalogVin, setCatalogVin] = useState(initialUrlParams.get("catalogVin") ?? "");
   const [catalogMake, setCatalogMake] = useState(initialUrlParams.get("catalogMake") ?? "");
   const [catalogModel, setCatalogModel] = useState(initialUrlParams.get("catalogModel") ?? "");
   const [catalogMinOtd, setCatalogMinOtd] = useState(initialUrlParams.get("catalogMinOtd") ?? "");
@@ -702,6 +706,7 @@ export function ComparisonPage() {
   const [catalogMaxDom, setCatalogMaxDom] = useState(initialUrlParams.get("catalogMaxDom") ?? "");
   const [resultDealerFilter, setResultDealerFilter] = useState(() => initialUrlParams.get("resultDealer") ?? "all");
   const [resultTrimFilter, setResultTrimFilter] = useState(() => initialUrlParams.get("resultTrim") ?? "all");
+  const [resultVinFilter, setResultVinFilter] = useState(() => initialUrlParams.get("resultVin") ?? "");
   const [negotiationPlaybookByOfferId, setNegotiationPlaybookByOfferId] = useState<Record<string, PlaybookKey>>({});
 
   const targetPreview = useMemo(() => {
@@ -750,6 +755,29 @@ export function ComparisonPage() {
     return map;
   }, [catalogRankedOffers]);
 
+  const catalogDisplayOffers = useMemo(() => {
+    if (catalogOffers.length === 0 || catalogRankedOffers.length === 0) {
+      return catalogOffers;
+    }
+
+    return [...catalogOffers].sort((left, right) => {
+      const leftRank = catalogRankByOfferId.get(left.offer_id)?.rank;
+      const rightRank = catalogRankByOfferId.get(right.offer_id)?.rank;
+
+      if (leftRank != null && rightRank != null) {
+        return leftRank - rightRank;
+      }
+      if (leftRank != null) {
+        return -1;
+      }
+      if (rightRank != null) {
+        return 1;
+      }
+
+      return left.otd_price - right.otd_price;
+    });
+  }, [catalogOffers, catalogRankByOfferId, catalogRankedOffers.length]);
+
   const catalogEffectiveBudget = useMemo(() => {
     if (Number.isFinite(budgetOtd) && budgetOtd > 0) {
       return budgetOtd;
@@ -776,19 +804,26 @@ export function ComparisonPage() {
   }, [allResultOffers, make, model]);
 
   const filteredOffers = useMemo(() => {
+    const vinNeedle = resultVinFilter.trim().toUpperCase();
     return offers.filter((offer) => {
       if (resultDealerFilter !== "all" && offer.dealership_name !== resultDealerFilter) {
         return false;
       }
       if (resultTrimFilter !== "all") {
         const offerTrim = extractTrimFromVehicleLabel(offer.vehicle_label, make, model);
-        return offerTrim === resultTrimFilter;
+        if (offerTrim !== resultTrimFilter) {
+          return false;
+        }
+      }
+      if (vinNeedle && !(offer.vin ?? "").toUpperCase().includes(vinNeedle)) {
+        return false;
       }
       return true;
     });
-  }, [offers, resultDealerFilter, resultTrimFilter, make, model]);
+  }, [offers, resultDealerFilter, resultTrimFilter, resultVinFilter, make, model]);
 
   const filteredRankedOffers = useMemo(() => {
+    const vinNeedle = resultVinFilter.trim().toUpperCase();
     return rankedOffers.filter((item) => {
       const offer = item.offer;
       if (resultDealerFilter !== "all" && offer.dealership_name !== resultDealerFilter) {
@@ -796,11 +831,16 @@ export function ComparisonPage() {
       }
       if (resultTrimFilter !== "all") {
         const offerTrim = extractTrimFromVehicleLabel(offer.vehicle_label, make, model);
-        return offerTrim === resultTrimFilter;
+        if (offerTrim !== resultTrimFilter) {
+          return false;
+        }
+      }
+      if (vinNeedle && !(offer.vin ?? "").toUpperCase().includes(vinNeedle)) {
+        return false;
       }
       return true;
     });
-  }, [rankedOffers, resultDealerFilter, resultTrimFilter, make, model]);
+  }, [rankedOffers, resultDealerFilter, resultTrimFilter, resultVinFilter, make, model]);
 
   const sessionByOfferId = useMemo(() => {
     const map = new Map<string, NegotiationSession>();
@@ -874,6 +914,7 @@ export function ComparisonPage() {
     params.set("catalogCity", catalogCity);
     params.set("catalogState", catalogState);
     params.set("catalogZip", catalogZip);
+    params.set("catalogVin", catalogVin);
     params.set("catalogMake", catalogMake);
     params.set("catalogModel", catalogModel);
     params.set("catalogMinOtd", catalogMinOtd);
@@ -882,6 +923,7 @@ export function ComparisonPage() {
     params.set("catalogMaxDom", catalogMaxDom);
     params.set("resultDealer", resultDealerFilter);
     params.set("resultTrim", resultTrimFilter);
+    params.set("resultVin", resultVinFilter);
 
     const next = `${window.location.pathname}?${params.toString()}`;
     window.history.replaceState({}, "", next);
@@ -916,6 +958,7 @@ export function ComparisonPage() {
     catalogCity,
     catalogState,
     catalogZip,
+    catalogVin,
     catalogMake,
     catalogModel,
     catalogMinOtd,
@@ -924,6 +967,7 @@ export function ComparisonPage() {
     catalogMaxDom,
     resultDealerFilter,
     resultTrimFilter,
+    resultVinFilter,
     negotiationPlaybookByOfferId,
   ]);
 
@@ -952,6 +996,7 @@ export function ComparisonPage() {
       expandedHistoryKeys,
       resultDealerFilter,
       resultTrimFilter,
+      resultVinFilter,
       negotiationPlaybookByOfferId,
     });
   }, [
@@ -974,6 +1019,7 @@ export function ComparisonPage() {
     expandedHistoryKeys,
     resultDealerFilter,
     resultTrimFilter,
+    resultVinFilter,
   ]);
 
   useEffect(() => {
@@ -1198,6 +1244,7 @@ export function ComparisonPage() {
       if (catalogCity.trim()) params.set("city", catalogCity.trim());
       if (catalogState.trim()) params.set("state", catalogState.trim());
       if (catalogZip.trim()) params.set("zipcode", catalogZip.trim());
+      if (catalogVin.trim()) params.set("vin", catalogVin.trim());
       if (catalogMake.trim()) params.set("make", catalogMake.trim());
       if (catalogModel.trim()) params.set("model", catalogModel.trim());
       if (catalogMinOtd.trim()) params.set("min_otd", catalogMinOtd.trim());
@@ -1438,6 +1485,7 @@ export function ComparisonPage() {
     setCatalogCity("");
     setCatalogState("");
     setCatalogZip("");
+    setCatalogVin("");
     setCatalogMake("");
     setCatalogModel("");
     setCatalogMinOtd("");
@@ -3003,6 +3051,17 @@ export function ComparisonPage() {
               </datalist>
             </label>
             <label>
+              VIN
+              <input
+                value={catalogVin}
+                onChange={(e) => {
+                  setCatalogVin(e.target.value);
+                  setCatalogPage(1);
+                }}
+                placeholder="All VINs"
+              />
+            </label>
+            <label>
               Make
               <input
                 list="catalog-make-options"
@@ -3108,7 +3167,7 @@ export function ComparisonPage() {
             <p className="empty">No catalog records match these filters.</p>
           ) : (
             <div className="offer-list list-offset">
-              {catalogOffers.map((offer) => {
+              {catalogDisplayOffers.map((offer) => {
                 const listingHref = normalizeExternalUrl(offer.listing_url);
                 const dealerHref = normalizeExternalUrl(offer.dealer_url);
                 const rankedItem = catalogRankByOfferId.get(offer.offer_id);
@@ -3138,6 +3197,10 @@ export function ComparisonPage() {
                 if (catalogZip.trim()) {
                   const pass = norm(offer.dealer_zipcode).startsWith(norm(catalogZip));
                   activeChecks.push({ label: "Zipcode", pass, value: offer.dealer_zipcode ?? "missing" });
+                }
+                if (catalogVin.trim()) {
+                  const pass = norm(offer.vin).includes(norm(catalogVin));
+                  activeChecks.push({ label: "VIN", pass, value: offer.vin ?? "missing" });
                 }
                 if (catalogMake.trim()) {
                   const pass = includesNorm(offer.vehicle_label, catalogMake.trim());
@@ -3179,12 +3242,13 @@ export function ComparisonPage() {
                   <div className="offer-card" key={`catalog-${offer.offer_id}`}>
                     <div className="offer-head">
                       <strong>{offer.vehicle_label}</strong>
-                      <span>${offer.otd_price.toLocaleString()}</span>
+                      <span>{rankedItem ? "#" + rankedItem.rank + " " : ""}{"$"}{offer.otd_price.toLocaleString()}</span>
                     </div>
                     <p>{offer.dealership_name}</p>
                     <div className="stats">
                       <span>Dealer {offer.dealership_id}</span>
                       {offer.vin && <span>VIN {offer.vin}</span>}
+                      {offer.exterior_color && <span>Exterior Color: {offer.exterior_color}</span>}
                       {offer.msrp != null && <span>MSRP ${offer.msrp.toLocaleString()}</span>}
                       {offer.advertised_price != null && <span>Adv ${offer.advertised_price.toLocaleString()}</span>}
                       {offer.selling_price != null && <span>Selling ${offer.selling_price.toLocaleString()}</span>}
@@ -3280,36 +3344,6 @@ export function ComparisonPage() {
             </div>
           )}
 
-          {catalogRankedOffers.length > 0 && (
-            <>
-              <div className="panel-header">
-                <h3>Inventory Ranked Shortlist</h3>
-                <span className="pill">{catalogRankedOffers.length} ranked</span>
-              </div>
-              <div className="offer-list list-offset">
-                {catalogRankedOffers.map((item) => (
-                  <div className={`rank-card${item.rank === 1 ? " best" : ""}`} key={`catalog-rank-${item.offer.offer_id}-${item.rank}`}>
-                    <div className="rank-row">
-                      <span className="rank">#{item.rank}</span>
-                      <strong>{item.offer.dealership_name}</strong>
-                      <span className="score">Score {item.score}</span>
-                    </div>
-                    <p>{item.offer.vehicle_label}</p>
-                    <div className="stats">
-                      <span>OTD ${item.offer.otd_price.toLocaleString()}</span>
-                      {item.offer.days_on_market !== undefined && <span>DOM {item.offer.days_on_market}d</span>}
-                      {item.offer.price_drop_30d !== undefined && item.offer.price_drop_30d > 0 && (
-                        <span>Drop 30d ${item.offer.price_drop_30d.toLocaleString()}</span>
-                      )}
-                      <span>Price {item.score_breakdown.price_score ?? 0}</span>
-                      <span>Specs {item.score_breakdown.specs_score ?? 0}</span>
-                      <span>Fees {item.score_breakdown.fee_score ?? 0}</span>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </>
-          )}
 
           {catalogTotal > 0 && (
             <div className="actions actions-spread">
@@ -3420,6 +3454,14 @@ export function ComparisonPage() {
                   ))}
                 </select>
               </label>
+              <label className="filter-inline">
+                VIN
+                <input
+                  value={resultVinFilter}
+                  onChange={(e) => setResultVinFilter(e.target.value.toUpperCase())}
+                  placeholder="All VINs"
+                />
+              </label>
             </div>
           </div>
 
@@ -3443,6 +3485,7 @@ export function ComparisonPage() {
                     <p>{offer.dealership_name}</p>
                     <div className="stats">
                       {offer.vin && <span>VIN {offer.vin}</span>}
+                      {offer.exterior_color && <span>Exterior Color: {offer.exterior_color}</span>}
                       {offer.msrp != null && <span>MSRP ${offer.msrp.toLocaleString()}</span>}
                       {offer.advertised_price != null && <span>Adv ${offer.advertised_price.toLocaleString()}</span>}
                       {offer.selling_price != null && <span>Selling ${offer.selling_price.toLocaleString()}</span>}
@@ -3536,6 +3579,14 @@ export function ComparisonPage() {
                   ))}
                 </select>
               </label>
+              <label className="filter-inline">
+                VIN
+                <input
+                  value={resultVinFilter}
+                  onChange={(e) => setResultVinFilter(e.target.value.toUpperCase())}
+                  placeholder="All VINs"
+                />
+              </label>
             </div>
           </div>
 
@@ -3577,6 +3628,7 @@ export function ComparisonPage() {
                       {item.offer.dealer_discount !== undefined && item.offer.dealer_discount > 0 && <span title="Dealer discount derived from MSRP minus advertised price.">Discount ${item.offer.dealer_discount.toLocaleString()}</span>}
                       {item.offer.listed_price !== undefined && <span title="Primary listed price used for OTD computation.">List ${item.offer.listed_price.toLocaleString()}</span>}
                       {item.offer.vin && <span title="Vehicle identification number from source listing.">VIN {item.offer.vin}</span>}
+                      {item.offer.exterior_color && <span title="Exterior paint color from source listing.">Exterior Color: {item.offer.exterior_color}</span>}
                       {isAvailable && <span className="tag tag-available" title="Listing feed marks this vehicle as available.">Available</span>}
                       {isOnLotAvailable && <span className="tag tag-onlot" title="Available and not marked in-transit, hidden, or pre-sold.">On Lot</span>}
                       {item.offer.is_in_transit && <span className="tag tag-transit" title="Vehicle is in transit. DOM can still increase because DOM is listing age, not guaranteed time on lot.">In-Transit</span>}

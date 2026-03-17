@@ -22,6 +22,7 @@ class ParsedListing:
     make: str
     model: str
     trim: str | None
+    exterior_color: str | None
     listed_price: float
     msrp: float | None
     advertised_price: float | None
@@ -53,6 +54,7 @@ class NormalizedListing:
     make: str
     model: str
     trim: str | None
+    exterior_color: str | None
     listed_price: float
     msrp: float | None
     advertised_price: float | None

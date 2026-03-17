@@ -314,6 +314,22 @@ class MarketCheckClient:
 
         listing_url = str(row.get("vdp_url") or row.get("vdpUrl") or row.get("vdp") or "").strip() or None
         dealer_url = str(row.get("dealer_website") or row.get("dealerWebsite") or dealer.get("website") or "").strip() or None
+        exterior_color = (
+            str(
+                row.get("exterior_color")
+                or row.get("exteriorColor")
+                or row.get("exterior_color_name")
+                or row.get("ext_color")
+                or row.get("color")
+                or build.get("exterior_color")
+                or build.get("exteriorColor")
+                or build.get("exterior_color_name")
+                or build.get("ext_color")
+                or build.get("color")
+                or ""
+            ).strip()
+            or None
+        )
 
         return {
             "id": str(row.get("id") or row.get("inventory_id") or vin or row.get("heading") or "unknown"),
@@ -326,6 +342,7 @@ class MarketCheckClient:
             "make": str(make),
             "model": str(model),
             "trim": row.get("trim") or build.get("trim"),
+            "exterior_color": exterior_color,
             "listed_price": float(listed_price or 0.0),
             "msrp": float(msrp) if msrp is not None else None,
             "advertised_price": float(advertised_price) if advertised_price is not None else None,

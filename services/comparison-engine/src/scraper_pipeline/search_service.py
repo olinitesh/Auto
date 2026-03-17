@@ -135,6 +135,7 @@ def search_local_offers(
             "make": item.make,
             "model": item.model,
             "trim": item.trim,
+            "exterior_color": item.exterior_color,
             "vin": item.vin,
             "listing_url": item.listing_url,
             "dealer_url": item.dealer_url,

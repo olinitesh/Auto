@@ -48,6 +48,7 @@ class ListingNormalizer:
             make=make,
             model=model,
             trim=trim,
+            exterior_color=parsed.exterior_color,
             listed_price=round(parsed.listed_price, 2),
             msrp=_round_or_none(parsed.msrp),
             advertised_price=_round_or_none(parsed.advertised_price),
