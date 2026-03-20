@@ -267,8 +267,9 @@ body::before {
 }
 
 .result-filters {
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   justify-content: flex-end;
+  overflow-x: auto;
 }
 
 .filter-inline {
@@ -277,11 +278,13 @@ body::before {
   gap: 4px;
   font-size: 0.72rem;
   color: var(--text-soft);
-  min-width: 160px;
+  min-width: 150px;
+  white-space: nowrap;
 }
 
-.filter-inline select {
-  min-width: 160px;
+.filter-inline select,
+.filter-inline input {
+  min-width: 150px;
   padding: 7px 8px;
 }
 
@@ -788,8 +791,14 @@ select:focus {
     padding: 20px 12px 34px;
   }
 
+  .result-filters {
+    flex-wrap: wrap;
+    overflow-x: visible;
+  }
+
   .filter-inline,
-  .filter-inline select {
+  .filter-inline select,
+  .filter-inline input {
     min-width: 100%;
   }
 
